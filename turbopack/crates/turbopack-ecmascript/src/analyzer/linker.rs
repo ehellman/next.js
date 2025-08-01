@@ -4,6 +4,7 @@ use anyhow::Result;
 use parking_lot::Mutex;
 use rustc_hash::{FxHashMap, FxHashSet};
 use swc_core::ecma::ast::Id;
+use tracing::Instrument;
 
 use super::{JsValue, graph::VarGraph};
 
@@ -21,16 +22,22 @@ where
     RF: 'a + Future<Output = Result<(JsValue, bool)>> + Send,
     F: 'a + Fn(JsValue) -> RF + Sync,
 {
+    let span = tracing::info_span!("link", steps = tracing::field::Empty);
     val.normalize();
-    let (val, steps) = link_internal_iterative(
-        graph,
-        val,
-        early_visitor,
-        visitor,
-        fun_args_values,
-        var_cache,
-    )
+    let (val, steps) = async {
+        link_internal_iterative(
+            graph,
+            val,
+            early_visitor,
+            visitor,
+            fun_args_values,
+            var_cache,
+        )
+        .await
+    }
+    .instrument(span.clone())
     .await?;
+    span.record("steps", steps);
     Ok((val, steps))
 }
 

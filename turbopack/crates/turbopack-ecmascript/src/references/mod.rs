@@ -989,7 +989,8 @@ pub async fn analyse_ecmascript_module_internal(
     .instrument(span)
     .await?;
 
-    let span = tracing::info_span!("effects processing");
+    let span = tracing::info_span!("effects processing", count = var_graph.effects.len());
+
     async {
         let effects = take(&mut var_graph.effects);
 
@@ -1037,12 +1038,15 @@ pub async fn analyse_ecmascript_module_internal(
                 Action::Effect(effect) => effect,
             };
 
+            let add_actions =
+                |actions: Vec<Action>| queue_stack.lock().extend(actions.into_iter().rev());
+
             let add_effects = |effects: Vec<Effect>| {
-                queue_stack
-                    .lock()
-                    .extend(effects.into_iter().map(Action::Effect).rev())
+                add_actions(effects.into_iter().map(Action::Effect).collect())
             };
 
+            let analysis = &mut analysis;
+            let analysis_state = &mut analysis_state;
             match effect {
                 Effect::Unreachable { start_ast_path } => {
                     debug_assert!(
@@ -1050,6 +1054,7 @@ pub async fn analyse_ecmascript_module_internal(
                         "unexpected Effect::Unreachable in tracing mode"
                     );
 
+                    let _tracing_span = tracing::info_span!("handle unreachable").entered();
                     analysis
                         .add_code_gen(Unreachable::new(AstPathRange::StartAfter(start_ast_path)));
                 }
@@ -1060,158 +1065,163 @@ pub async fn analyse_ecmascript_module_internal(
                     span: _,
                     in_try: _,
                 } => {
-                    // Don't replace condition with it's truth-y value, if it has side effects
-                    // (e.g. function calls)
-                    let condition_has_side_effects = condition.has_side_effects();
+                    async {
+                        // Don't replace condition with it's truth-y value, if it has side effects
+                        // (e.g. function calls)
+                        let condition_has_side_effects = condition.has_side_effects();
 
-                    let condition = analysis_state
-                        .link_value(*condition, ImportAttributes::empty_ref())
-                        .await?;
+                        let condition = analysis_state
+                            .link_value(*condition, ImportAttributes::empty_ref())
+                            .await?;
 
-                    macro_rules! inactive {
-                        ($block:ident) => {
-                            if !is_tracing {
-                                analysis.add_code_gen(Unreachable::new($block.range.clone()));
-                            }
-                        };
-                    }
-                    macro_rules! condition {
-                        ($expr:expr) => {
-                            if !is_tracing && !condition_has_side_effects {
-                                analysis.add_code_gen(ConstantConditionCodeGen::new(
-                                    $expr,
-                                    condition_ast_path.to_vec().into(),
-                                ));
-                            }
-                        };
-                    }
-                    macro_rules! active {
-                        ($block:ident) => {
-                            queue_stack
-                                .get_mut()
-                                .extend($block.effects.into_iter().map(Action::Effect).rev())
-                        };
-                    }
-                    match *kind {
-                        ConditionalKind::If { then } => match condition.is_truthy() {
-                            Some(true) => {
-                                condition!(ConstantConditionValue::Truthy);
-                                active!(then);
-                            }
-                            Some(false) => {
-                                condition!(ConstantConditionValue::Falsy);
-                                inactive!(then);
-                            }
-                            None => {
-                                active!(then);
-                            }
-                        },
-                        ConditionalKind::Else { r#else } => match condition.is_truthy() {
-                            Some(true) => {
-                                condition!(ConstantConditionValue::Truthy);
-                                inactive!(r#else);
-                            }
-                            Some(false) => {
-                                condition!(ConstantConditionValue::Falsy);
-                                active!(r#else);
-                            }
-                            None => {
-                                active!(r#else);
-                            }
-                        },
-                        ConditionalKind::IfElse { then, r#else }
-                        | ConditionalKind::Ternary { then, r#else } => {
-                            match condition.is_truthy() {
+                        macro_rules! inactive {
+                            ($block:ident) => {
+                                if !is_tracing {
+                                    analysis.add_code_gen(Unreachable::new($block.range.clone()));
+                                }
+                            };
+                        }
+                        macro_rules! condition {
+                            ($expr:expr) => {
+                                if !is_tracing && !condition_has_side_effects {
+                                    analysis.add_code_gen(ConstantConditionCodeGen::new(
+                                        $expr,
+                                        condition_ast_path.to_vec().into(),
+                                    ));
+                                }
+                            };
+                        }
+                        macro_rules! active {
+                            ($block:ident) => {
+                                queue_stack
+                                    .get_mut()
+                                    .extend($block.effects.into_iter().map(Action::Effect).rev())
+                            };
+                        }
+                        match *kind {
+                            ConditionalKind::If { then } => match condition.is_truthy() {
                                 Some(true) => {
                                     condition!(ConstantConditionValue::Truthy);
                                     active!(then);
+                                }
+                                Some(false) => {
+                                    condition!(ConstantConditionValue::Falsy);
+                                    inactive!(then);
+                                }
+                                None => {
+                                    active!(then);
+                                }
+                            },
+                            ConditionalKind::Else { r#else } => match condition.is_truthy() {
+                                Some(true) => {
+                                    condition!(ConstantConditionValue::Truthy);
                                     inactive!(r#else);
                                 }
                                 Some(false) => {
                                     condition!(ConstantConditionValue::Falsy);
                                     active!(r#else);
-                                    inactive!(then);
                                 }
                                 None => {
-                                    active!(then);
                                     active!(r#else);
                                 }
-                            }
-                        }
-                        ConditionalKind::IfElseMultiple { then, r#else } => {
-                            match condition.is_truthy() {
-                                Some(true) => {
-                                    condition!(ConstantConditionValue::Truthy);
-                                    for then in then {
+                            },
+                            ConditionalKind::IfElse { then, r#else }
+                            | ConditionalKind::Ternary { then, r#else } => {
+                                match condition.is_truthy() {
+                                    Some(true) => {
+                                        condition!(ConstantConditionValue::Truthy);
                                         active!(then);
-                                    }
-                                    for r#else in r#else {
                                         inactive!(r#else);
                                     }
-                                }
-                                Some(false) => {
-                                    condition!(ConstantConditionValue::Falsy);
-                                    for then in then {
+                                    Some(false) => {
+                                        condition!(ConstantConditionValue::Falsy);
+                                        active!(r#else);
                                         inactive!(then);
                                     }
-                                    for r#else in r#else {
-                                        active!(r#else);
-                                    }
-                                }
-                                None => {
-                                    for then in then {
+                                    None => {
                                         active!(then);
-                                    }
-                                    for r#else in r#else {
                                         active!(r#else);
                                     }
                                 }
                             }
-                        }
-                        ConditionalKind::And { expr } => match condition.is_truthy() {
-                            Some(true) => {
-                                condition!(ConstantConditionValue::Truthy);
-                                active!(expr);
+                            ConditionalKind::IfElseMultiple { then, r#else } => {
+                                match condition.is_truthy() {
+                                    Some(true) => {
+                                        condition!(ConstantConditionValue::Truthy);
+                                        for then in then {
+                                            active!(then);
+                                        }
+                                        for r#else in r#else {
+                                            inactive!(r#else);
+                                        }
+                                    }
+                                    Some(false) => {
+                                        condition!(ConstantConditionValue::Falsy);
+                                        for then in then {
+                                            inactive!(then);
+                                        }
+                                        for r#else in r#else {
+                                            active!(r#else);
+                                        }
+                                    }
+                                    None => {
+                                        for then in then {
+                                            active!(then);
+                                        }
+                                        for r#else in r#else {
+                                            active!(r#else);
+                                        }
+                                    }
+                                }
                             }
-                            Some(false) => {
-                                // The condition value needs to stay since it's used
-                                inactive!(expr);
-                            }
-                            None => {
-                                active!(expr);
-                            }
-                        },
-                        ConditionalKind::Or { expr } => match condition.is_truthy() {
-                            Some(true) => {
-                                // The condition value needs to stay since it's used
-                                inactive!(expr);
-                            }
-                            Some(false) => {
-                                condition!(ConstantConditionValue::Falsy);
-                                active!(expr);
-                            }
-                            None => {
-                                active!(expr);
-                            }
-                        },
-                        ConditionalKind::NullishCoalescing { expr } => {
-                            match condition.is_nullish() {
+                            ConditionalKind::And { expr } => match condition.is_truthy() {
                                 Some(true) => {
-                                    condition!(ConstantConditionValue::Nullish);
+                                    condition!(ConstantConditionValue::Truthy);
                                     active!(expr);
                                 }
                                 Some(false) => {
+                                    // The condition value needs to stay since it's used
                                     inactive!(expr);
                                 }
                                 None => {
                                     active!(expr);
                                 }
+                            },
+                            ConditionalKind::Or { expr } => match condition.is_truthy() {
+                                Some(true) => {
+                                    // The condition value needs to stay since it's used
+                                    inactive!(expr);
+                                }
+                                Some(false) => {
+                                    condition!(ConstantConditionValue::Falsy);
+                                    active!(expr);
+                                }
+                                None => {
+                                    active!(expr);
+                                }
+                            },
+                            ConditionalKind::NullishCoalescing { expr } => {
+                                match condition.is_nullish() {
+                                    Some(true) => {
+                                        condition!(ConstantConditionValue::Nullish);
+                                        active!(expr);
+                                    }
+                                    Some(false) => {
+                                        inactive!(expr);
+                                    }
+                                    None => {
+                                        active!(expr);
+                                    }
+                                }
+                            }
+                            ConditionalKind::Labeled { body } => {
+                                active!(body);
                             }
                         }
-                        ConditionalKind::Labeled { body } => {
-                            active!(body);
-                        }
+                        anyhow::Ok(())
                     }
+                    .instrument(tracing::info_span!("handle conditional"))
+                    .await?;
                 }
                 Effect::Call {
                     func,
@@ -1227,21 +1237,25 @@ pub async fn analyse_ecmascript_module_internal(
                         continue;
                     }
 
-                    let func = analysis_state
-                        .link_value(*func, eval_context.imports.get_attributes(span))
-                        .await?;
+                    async move {
+                        let func = analysis_state
+                            .link_value(*func, eval_context.imports.get_attributes(span))
+                            .await?;
 
-                    handle_call(
-                        &ast_path,
-                        span,
-                        func,
-                        args,
-                        &analysis_state,
-                        &add_effects,
-                        &mut analysis,
-                        in_try,
-                        new,
-                    )
+                        handle_call(
+                            &ast_path,
+                            span,
+                            func,
+                            args,
+                            analysis_state,
+                            &add_effects,
+                            analysis,
+                            in_try,
+                            new,
+                        )
+                        .await
+                    }
+                    .instrument(tracing::info_span!("handle call"))
                     .await?;
                 }
                 Effect::MemberCall {
@@ -1259,35 +1273,36 @@ pub async fn analyse_ecmascript_module_internal(
                         continue;
                     }
 
-                    let func = analysis_state
-                        .link_value(
-                            JsValue::member(obj.clone(), prop),
-                            eval_context.imports.get_attributes(span),
-                        )
-                        .await?;
-
-                    if !new
-                        && matches!(
-                            func,
-                            JsValue::WellKnownFunction(
-                                WellKnownFunctionKind::ArrayFilter
-                                    | WellKnownFunctionKind::ArrayForEach
-                                    | WellKnownFunctionKind::ArrayMap
+                    async move {
+                        let func = analysis_state
+                            .link_value(
+                                JsValue::member(obj.clone(), prop),
+                                eval_context.imports.get_attributes(span),
                             )
-                        )
-                        && let [EffectArg::Closure(value, block)] = &mut args[..]
-                        && let JsValue::Array {
-                            items: ref mut values,
-                            mutable,
-                            ..
-                        } = analysis_state
-                            .link_value(*obj, eval_context.imports.get_attributes(span))
-                            .await?
-                    {
-                        *value = analysis_state
-                            .link_value(take(value), ImportAttributes::empty_ref())
                             .await?;
-                        if let JsValue::Function(_, func_ident, _) = value {
+
+                        if !new
+                            && matches!(
+                                func,
+                                JsValue::WellKnownFunction(
+                                    WellKnownFunctionKind::ArrayFilter
+                                        | WellKnownFunctionKind::ArrayForEach
+                                        | WellKnownFunctionKind::ArrayMap
+                                )
+                            )
+                            && let [EffectArg::Closure(value, block)] = &mut args[..]
+                            && let JsValue::Array {
+                                items: ref mut values,
+                                mutable,
+                                ..
+                            } = analysis_state
+                                .link_value(*obj, eval_context.imports.get_attributes(span))
+                                .await?
+                            && let _ = (*value = analysis_state
+                                .link_value(take(value), ImportAttributes::empty_ref())
+                                .await?)
+                            && let JsValue::Function(_, func_ident, _) = value
+                        {
                             let mut closure_arg = JsValue::alternatives(take(values));
                             if mutable {
                                 closure_arg.add_unknown_mutations(true);
@@ -1296,28 +1311,25 @@ pub async fn analyse_ecmascript_module_internal(
                                 .fun_args_values
                                 .get_mut()
                                 .insert(*func_ident, vec![closure_arg]);
-                            queue_stack.get_mut().push(Action::LeaveScope(*func_ident));
-                            queue_stack.get_mut().extend(
-                                take(&mut block.effects)
-                                    .into_iter()
-                                    .map(Action::Effect)
-                                    .rev(),
-                            );
-                            continue;
+                            add_actions(vec![Action::LeaveScope(*func_ident)]);
+                            add_effects(take(&mut block.effects));
+                        } else {
+                            handle_call(
+                                &ast_path,
+                                span,
+                                func,
+                                args,
+                                analysis_state,
+                                &add_effects,
+                                analysis,
+                                in_try,
+                                new,
+                            )
+                            .await?;
                         }
+                        anyhow::Ok(())
                     }
-
-                    handle_call(
-                        &ast_path,
-                        span,
-                        func,
-                        args,
-                        &analysis_state,
-                        &add_effects,
-                        &mut analysis,
-                        in_try,
-                        new,
-                    )
+                    .instrument(tracing::info_span!("handle member call"))
                     .await?;
                 }
                 Effect::FreeVar {
@@ -1327,26 +1339,30 @@ pub async fn analyse_ecmascript_module_internal(
                     in_try: _,
                 } => {
                     debug_assert!(!is_tracing, "unexpected Effect::FreeVar in tracing mode");
-
-                    // FreeVar("require") might be turbopackIgnore-d
-                    if !analysis_state
-                        .link_value(
-                            JsValue::FreeVar(var.clone()),
-                            eval_context.imports.get_attributes(span),
-                        )
-                        .await?
-                        .is_unknown()
-                    {
-                        // Call handle free var
-                        handle_free_var(
-                            &ast_path,
-                            JsValue::FreeVar(var),
-                            span,
-                            &analysis_state,
-                            &mut analysis,
-                        )
-                        .await?;
+                    async move {
+                        // FreeVar("require") might be turbopackIgnore-d
+                        if !analysis_state
+                            .link_value(
+                                JsValue::FreeVar(var.clone()),
+                                eval_context.imports.get_attributes(span),
+                            )
+                            .await?
+                            .is_unknown()
+                        {
+                            // Call handle free var
+                            handle_free_var(
+                                &ast_path,
+                                JsValue::FreeVar(var),
+                                span,
+                                analysis_state,
+                                analysis,
+                            )
+                            .await?;
+                        }
+                        anyhow::Ok(())
                     }
+                    .instrument(tracing::info_span!("handle free var"))
+                    .await?;
                 }
                 Effect::Member {
                     obj,
@@ -1356,16 +1372,20 @@ pub async fn analyse_ecmascript_module_internal(
                     in_try: _,
                 } => {
                     debug_assert!(!is_tracing, "unexpected Effect::Member in tracing mode");
+                    async move {
+                        // Intentionally not awaited because `handle_member` reads this only when
+                        // needed
+                        let obj = analysis_state.link_value(*obj, ImportAttributes::empty_ref());
 
-                    // Intentionally not awaited because `handle_member` reads this only when needed
-                    let obj = analysis_state.link_value(*obj, ImportAttributes::empty_ref());
+                        let prop = analysis_state
+                            .link_value(*prop, ImportAttributes::empty_ref())
+                            .await?;
 
-                    let prop = analysis_state
-                        .link_value(*prop, ImportAttributes::empty_ref())
-                        .await?;
-
-                    handle_member(&ast_path, obj, prop, span, &analysis_state, &mut analysis)
-                        .await?;
+                        handle_member(&ast_path, obj, prop, span, analysis_state, analysis).await?;
+                        anyhow::Ok(())
+                    }
+                    .instrument(tracing::info_span!("handle member"))
+                    .await?;
                 }
                 Effect::ImportedBinding {
                     esm_reference_index,
@@ -1378,51 +1398,50 @@ pub async fn analyse_ecmascript_module_internal(
                         continue;
                     };
 
-                    if let Some("__turbopack_module_id__") = export.as_deref() {
-                        analysis.add_reference_code_gen(
-                            EsmModuleIdAssetReference::new(*r),
-                            ast_path.into(),
-                        )
-                    } else {
-                        if matches!(
-                            options.tree_shaking_mode,
-                            Some(TreeShakingMode::ReexportsOnly)
-                        ) {
-                            let original_reference = r.await?;
-                            if original_reference.export_name.is_none()
-                                && export.is_some()
-                                && let Some(export) = export
-                            {
-                                // Rewrite `import * as ns from 'foo'; foo.bar()` to behave like
-                                // `import {bar} from 'foo'; bar()` for tree shaking purposes.
-                                let named_reference = analysis
-                                    .add_esm_reference_namespace_resolved(
-                                        esm_reference_index,
-                                        export.clone(),
-                                        || {
-                                            EsmAssetReference::new(
-                                                original_reference.origin,
-                                                original_reference.request.clone(),
-                                                original_reference.issue_source,
-                                                original_reference.annotations.clone(),
-                                                Some(ModulePart::export(export.clone())),
-                                                original_reference.import_externals,
-                                            )
-                                            .resolved_cell()
-                                        },
-                                    );
-                                analysis.add_code_gen(EsmBinding::new_keep_this(
-                                    named_reference,
-                                    Some(export),
-                                    ast_path.into(),
-                                ));
-                                continue;
-                            }
+                    let tree_shaking_mode = options.tree_shaking_mode;
+                    async move {
+                        if let Some("__turbopack_module_id__") = export.as_deref() {
+                            analysis.add_reference_code_gen(
+                                EsmModuleIdAssetReference::new(*r),
+                                ast_path.into(),
+                            )
+                        } else if matches!(tree_shaking_mode, Some(TreeShakingMode::ReexportsOnly))
+                            && let original_reference = r.await?
+                            && original_reference.export_name.is_none()
+                            && export.is_some()
+                            && let Some(export) = export
+                        {
+                            // Rewrite `import * as ns from 'foo'; foo.bar()` to behave like
+                            // `import {bar} from 'foo'; bar()` for tree shaking purposes.
+                            let named_reference = analysis.add_esm_reference_namespace_resolved(
+                                esm_reference_index,
+                                export.clone(),
+                                || {
+                                    EsmAssetReference::new(
+                                        original_reference.origin,
+                                        original_reference.request.clone(),
+                                        original_reference.issue_source,
+                                        original_reference.annotations.clone(),
+                                        Some(ModulePart::export(export.clone())),
+                                        original_reference.import_externals,
+                                    )
+                                    .resolved_cell()
+                                },
+                            );
+                            analysis.add_code_gen(EsmBinding::new_keep_this(
+                                named_reference,
+                                Some(export),
+                                ast_path.into(),
+                            ));
+                        } else {
+                            analysis.add_esm_reference(esm_reference_index);
+                            analysis.add_code_gen(EsmBinding::new(*r, export, ast_path.into()));
                         }
 
-                        analysis.add_esm_reference(esm_reference_index);
-                        analysis.add_code_gen(EsmBinding::new(*r, export, ast_path.into()));
+                        anyhow::Ok(())
                     }
+                    .instrument(tracing::info_span!("handle imported binding"))
+                    .await?;
                 }
                 Effect::TypeOf {
                     arg,
@@ -1430,10 +1449,15 @@ pub async fn analyse_ecmascript_module_internal(
                     span,
                 } => {
                     debug_assert!(!is_tracing, "unexpected Effect::TypeOf in tracing mode");
-                    let arg = analysis_state
-                        .link_value(*arg, ImportAttributes::empty_ref())
-                        .await?;
-                    handle_typeof(&ast_path, arg, span, &analysis_state, &mut analysis).await?;
+                    async move {
+                        let arg = analysis_state
+                            .link_value(*arg, ImportAttributes::empty_ref())
+                            .await?;
+                        handle_typeof(&ast_path, arg, span, analysis_state, analysis).await?;
+                        anyhow::Ok(())
+                    }
+                    .instrument(tracing::info_span!("handle typeof"))
+                    .await?;
                 }
                 Effect::ImportMeta {
                     ast_path,
@@ -1441,14 +1465,19 @@ pub async fn analyse_ecmascript_module_internal(
                     in_try: _,
                 } => {
                     debug_assert!(!is_tracing, "unexpected Effect::ImportMeta in tracing mode");
-                    if analysis_state.first_import_meta {
-                        analysis_state.first_import_meta = false;
-                        analysis.add_code_gen(ImportMetaBinding::new(
-                            source.ident().path().owned().await?,
-                        ));
-                    }
+                    async move {
+                        if analysis_state.first_import_meta {
+                            analysis_state.first_import_meta = false;
+                            analysis.add_code_gen(ImportMetaBinding::new(
+                                source.ident().path().owned().await?,
+                            ));
+                        }
 
-                    analysis.add_code_gen(ImportMetaRef::new(ast_path.into()));
+                        analysis.add_code_gen(ImportMetaRef::new(ast_path.into()));
+                        anyhow::Ok(())
+                    }
+                    .instrument(tracing::info_span!("handle import meta"))
+                    .await?;
                 }
             }
         }
