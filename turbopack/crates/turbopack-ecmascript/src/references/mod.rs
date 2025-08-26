@@ -989,6 +989,42 @@ pub async fn analyse_ecmascript_module_internal(
     .instrument(span)
     .await?;
 
+    static HISTOGRAM: once_cell::sync::Lazy<Option<String>> =
+        once_cell::sync::Lazy::new(|| std::env::var("JSVALUE_HISTOGRAM").ok());
+    if let Some(p) = HISTOGRAM.as_ref()
+        && path.path.ends_with(p)
+    {
+        let mut histogram = vec![];
+        let mut add = |v: u32| {
+            let scaled = (v / 10) as usize;
+            if histogram.len() < scaled + 1 {
+                histogram.resize(scaled + 1, 0);
+            }
+            histogram[scaled] += 1usize;
+        };
+        for (name, v) in &var_graph.values {
+            let size = v.total_nodes();
+            add(size);
+            if size > 100 {
+                println!("big jsvalue {name:?} {size} {v}")
+            }
+        }
+        for effect in &var_graph.effects {
+            for v in effect.values() {
+                let size = v.total_nodes();
+                add(size);
+                if size > 100 {
+                    println!("big jsvalue in effect {size} {v}")
+                }
+            }
+        }
+        let scale = 150f32 / (*histogram.iter().max().unwrap() as f32);
+        for (i, count) in histogram.into_iter().enumerate() {
+            let bar = "*".repeat((count as f32 * scale) as usize);
+            println!("{i:3}: {bar} ({count})");
+        }
+    }
+
     let span = tracing::info_span!("effects processing", count = var_graph.effects.len());
 
     async {
