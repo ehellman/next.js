@@ -1736,7 +1736,6 @@ pub async fn read_matches(
                                 prefix.truncate(len)
                             }
                             RawDirectoryEntry::Other => {}
-                            RawDirectoryEntry::Error => {}
                         }
                     }
                 }
