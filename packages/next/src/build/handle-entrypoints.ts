@@ -109,7 +109,6 @@ export async function handleRouteType({
         manifestLoader.deleteMiddlewareManifest(key)
       }
 
-      await manifestLoader.loadAppBuildManifest(page)
       await manifestLoader.loadBuildManifest(page, 'app')
       await manifestLoader.loadAppPathsManifest(page)
       await manifestLoader.loadActionManifest(page)
