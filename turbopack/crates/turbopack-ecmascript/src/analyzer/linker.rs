@@ -22,7 +22,7 @@ where
     RF: 'a + Future<Output = Result<(JsValue, bool)>> + Send,
     F: 'a + Fn(JsValue) -> RF + Sync,
 {
-    let span = tracing::info_span!("link", steps = tracing::field::Empty);
+    let span = tracing::trace_span!("link", steps = tracing::field::Empty);
     val.normalize();
     let (val, steps) = async {
         link_internal_iterative(
