@@ -186,6 +186,12 @@ type InternalLinkProps = {
    * Optional event handler for when the `<Link>` is navigated.
    */
   onNavigate?: OnNavigateEventHandler
+
+  /**
+   * Optional state data to be passed to the history.pushState call during navigation.
+   * This data will be available via window.history.state.nextLinkState on the target page.
+   */
+  historyState?: Record<string, unknown>
 }
 
 // TODO-APP: Include the full set of Anchor props
@@ -218,7 +224,8 @@ function linkClicked(
   linkInstanceRef: React.RefObject<LinkInstance | null>,
   replace?: boolean,
   scroll?: boolean,
-  onNavigate?: OnNavigateEventHandler
+  onNavigate?: OnNavigateEventHandler,
+  historyState?: Record<string, unknown>
 ): void {
   if (typeof window !== 'undefined') {
     if (isModifiedEvent(e) || e.currentTarget.hasAttribute('download')) {
@@ -262,7 +269,8 @@ function linkClicked(
         as || href,
         replace ? 'replace' : 'push',
         scroll ?? true,
-        linkInstanceRef.current
+        linkInstanceRef.current,
+        historyState
       )
     })
   }
@@ -310,6 +318,7 @@ export default function LinkComponent(
     onNavigate,
     ref: forwardedRef,
     unstable_dynamicOnHover,
+    historyState,
     ...restProps
   } = props
 
@@ -375,6 +384,7 @@ export default function LinkComponent(
       onMouseEnter: true,
       onTouchStart: true,
       onNavigate: true,
+      historyState: true,
     } as const
     const optionalProps: LinkPropsOptional[] = Object.keys(
       optionalPropsGuard
@@ -426,6 +436,14 @@ export default function LinkComponent(
           throw createPropError({
             key,
             expected: '`boolean | "auto" | "unstable_forceStale"`',
+            actual: valType,
+          })
+        }
+      } else if (key === 'historyState') {
+        if (props[key] != null && valType !== 'object') {
+          throw createPropError({
+            key,
+            expected: '`object`',
             actual: valType,
           })
         }
@@ -532,7 +550,16 @@ export default function LinkComponent(
         return
       }
 
-      linkClicked(e, href, as, linkInstanceRef, replace, scroll, onNavigate)
+      linkClicked(
+        e,
+        href,
+        as,
+        linkInstanceRef,
+        replace,
+        scroll,
+        onNavigate,
+        historyState
+      )
     },
     onMouseEnter(e) {
       if (typeof onMouseEnterProp === 'function') {

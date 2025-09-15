@@ -84,5 +84,8 @@ export function handleMutable(
       ? mutable.patchedTree
       : state.tree,
     nextUrl,
+    historyState: isNotUndefined(mutable.historyState)
+      ? mutable.historyState
+      : state.historyState,
   }
 }

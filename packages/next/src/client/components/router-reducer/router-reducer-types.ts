@@ -35,6 +35,7 @@ export interface Mutable {
   shouldScroll?: boolean
   preserveCustomHistoryState?: boolean
   onlyHashChange?: boolean
+  historyState?: Record<string, unknown>
 }
 
 export interface ServerActionMutable extends Mutable {
@@ -110,6 +111,7 @@ export interface NavigateAction {
   navigateType: 'push' | 'replace'
   shouldScroll: boolean
   allowAliasing: boolean
+  historyState?: Record<string, unknown>
 }
 
 /**
@@ -254,6 +256,10 @@ export type AppRouterState = {
    * The underlying "url" representing the UI state, which is used for intercepting routes.
    */
   nextUrl: string | null
+  /**
+   * Custom state data to be stored in the history state.
+   */
+  historyState?: Record<string, unknown>
 }
 
 export type ReadonlyReducerState = Readonly<AppRouterState>

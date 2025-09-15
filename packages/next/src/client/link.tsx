@@ -98,6 +98,12 @@ type InternalLinkProps = {
    * Optional event handler for when the `<Link>` is navigated.
    */
   onNavigate?: OnNavigateEventHandler
+  /**
+   * Optional state data to be passed to the history.pushState call
+   * during navigation. This data will be available via window.history.state.nextLinkState
+   * on the target page.
+   */
+  historyState?: Record<string, unknown>
 }
 
 // TODO-APP: Include the full set of Anchor props
@@ -194,7 +200,8 @@ function linkClicked(
   shallow?: boolean,
   scroll?: boolean,
   locale?: string | false,
-  onNavigate?: OnNavigateEventHandler
+  onNavigate?: OnNavigateEventHandler,
+  historyState?: Record<string, unknown>
 ): void {
   if (isModifiedEvent(e) || e.currentTarget.hasAttribute('download')) {
     // ignore click for browser’s default behavior
@@ -237,10 +244,12 @@ function linkClicked(
         shallow,
         locale,
         scroll: routerScroll,
+        historyState,
       })
     } else {
       router[replace ? 'replace' : 'push'](as || href, {
         scroll: routerScroll,
+        historyState,
       })
     }
   }
@@ -284,6 +293,7 @@ const Link = React.forwardRef<HTMLAnchorElement, LinkPropsReal>(
       onNavigate,
       onMouseEnter: onMouseEnterProp,
       onTouchStart: onTouchStartProp,
+      historyState,
       ...restProps
     } = props
 
@@ -344,6 +354,7 @@ const Link = React.forwardRef<HTMLAnchorElement, LinkPropsReal>(
         onMouseEnter: true,
         onTouchStart: true,
         onNavigate: true,
+        historyState: true,
       } as const
       const optionalProps: LinkPropsOptional[] = Object.keys(
         optionalPropsGuard
@@ -356,6 +367,14 @@ const Link = React.forwardRef<HTMLAnchorElement, LinkPropsReal>(
             throw createPropError({
               key,
               expected: '`string` or `object`',
+              actual: valType,
+            })
+          }
+        } else if (key === 'historyState') {
+          if (props[key] && valType !== 'object') {
+            throw createPropError({
+              key,
+              expected: '`object`',
               actual: valType,
             })
           }
@@ -504,7 +523,8 @@ const Link = React.forwardRef<HTMLAnchorElement, LinkPropsReal>(
           shallow,
           scroll,
           locale,
-          onNavigate
+          onNavigate,
+          historyState
         )
       },
       onMouseEnter(e) {

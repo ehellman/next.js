@@ -68,6 +68,7 @@ interface TransitionOptions {
   locale?: string | false
   scroll?: boolean
   unstable_skipClientCache?: boolean
+  historyState?: Record<string, unknown>
 }
 
 interface NextHistoryState {
@@ -78,9 +79,14 @@ interface NextHistoryState {
 
 export type HistoryState =
   | null
-  | { __NA: true; __N?: false }
-  | { __N: false; __NA?: false }
-  | ({ __NA?: false; __N: true; key: string } & NextHistoryState)
+  | { __NA: true; __N?: false; nextLinkState?: Record<string, unknown> }
+  | { __N: false; __NA?: false; nextLinkState?: Record<string, unknown> }
+  | ({
+      __NA?: false
+      __N: true
+      key: string
+      nextLinkState?: Record<string, unknown>
+    } & NextHistoryState)
 
 function buildCancellationError() {
   return Object.assign(new Error('Route Cancelled'), {
@@ -1871,14 +1877,18 @@ export default class Router implements BaseRouter {
 
     if (method !== 'pushState' || getURL() !== as) {
       this._shallow = options.shallow
+      const historyState: HistoryState = {
+        url,
+        as,
+        options,
+        __N: true,
+        key: (this._key = method !== 'pushState' ? this._key : createKey()),
+        ...(options.historyState
+          ? { nextLinkState: options.historyState }
+          : {}),
+      }
       window.history[method](
-        {
-          url,
-          as,
-          options,
-          __N: true,
-          key: (this._key = method !== 'pushState' ? this._key : createKey()),
-        } as HistoryState,
+        historyState,
         // Most browsers currently ignores this parameter, although they may use it in the future.
         // Passing the empty string here should be safe against future changes to the method.
         // https://developer.mozilla.org/docs/Web/API/History/replaceState

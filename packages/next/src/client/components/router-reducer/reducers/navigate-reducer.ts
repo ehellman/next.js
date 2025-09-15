@@ -172,8 +172,14 @@ export function navigateReducer(
   state: ReadonlyReducerState,
   action: NavigateAction
 ): ReducerState {
-  const { url, isExternalUrl, navigateType, shouldScroll, allowAliasing } =
-    action
+  const {
+    url,
+    isExternalUrl,
+    navigateType,
+    shouldScroll,
+    allowAliasing,
+    historyState,
+  } = action
   const mutable: Mutable = {}
   const { hash } = url
   const href = createHrefFromUrl(url)
@@ -183,6 +189,7 @@ export function navigateReducer(
 
   mutable.preserveCustomHistoryState = false
   mutable.pendingPush = pendingPush
+  mutable.historyState = historyState
 
   if (isExternalUrl) {
     return handleExternalUrl(state, mutable, url.toString(), pendingPush)

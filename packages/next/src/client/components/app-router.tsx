@@ -61,7 +61,12 @@ function HistoryUpdater({
       window.next.__pendingUrl = undefined
     }
 
-    const { tree, pushRef, canonicalUrl } = appRouterState
+    const {
+      tree,
+      pushRef,
+      canonicalUrl,
+      historyState: routerHistoryState,
+    } = appRouterState
     const historyState = {
       ...(pushRef.preserveCustomHistoryState ? window.history.state : {}),
       // Identifier is shortened intentionally.
@@ -69,6 +74,7 @@ function HistoryUpdater({
       // __N is used to identify if the history entry can be handled by the old router.
       __NA: true,
       __PRIVATE_NEXTJS_INTERNALS_TREE: tree,
+      ...(routerHistoryState ? { nextLinkState: routerHistoryState } : {}),
     }
     if (
       pushRef.pendingPush &&

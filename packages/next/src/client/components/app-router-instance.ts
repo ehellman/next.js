@@ -279,7 +279,8 @@ export function dispatchNavigateAction(
   href: string,
   navigateType: NavigateAction['navigateType'],
   shouldScroll: boolean,
-  linkInstanceRef: LinkInstance | null
+  linkInstanceRef: LinkInstance | null,
+  historyState?: Record<string, unknown>
 ): void {
   // TODO: This stuff could just go into the reducer. Leaving as-is for now
   // since we're about to rewrite all the router reducer stuff anyway.
@@ -303,6 +304,7 @@ export function dispatchNavigateAction(
     shouldScroll,
     navigateType,
     allowAliasing: true,
+    historyState,
   })
 }
 
@@ -392,12 +394,24 @@ export const publicAppRouterInstance: AppRouterInstance = {
       },
   replace: (href: string, options?: NavigateOptions) => {
     startTransition(() => {
-      dispatchNavigateAction(href, 'replace', options?.scroll ?? true, null)
+      dispatchNavigateAction(
+        href,
+        'replace',
+        options?.scroll ?? true,
+        null,
+        options?.historyState
+      )
     })
   },
   push: (href: string, options?: NavigateOptions) => {
     startTransition(() => {
-      dispatchNavigateAction(href, 'push', options?.scroll ?? true, null)
+      dispatchNavigateAction(
+        href,
+        'push',
+        options?.scroll ?? true,
+        null,
+        options?.historyState
+      )
     })
   },
   refresh: () => {

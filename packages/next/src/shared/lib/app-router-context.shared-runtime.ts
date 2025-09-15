@@ -13,6 +13,7 @@ import React from 'react'
 
 export interface NavigateOptions {
   scroll?: boolean
+  historyState?: Record<string, unknown>
 }
 
 export interface PrefetchOptions {
