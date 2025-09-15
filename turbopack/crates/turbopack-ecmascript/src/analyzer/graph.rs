@@ -251,7 +251,7 @@ impl Effect {
         }
     }
 
-    /// Normalizes all contained values.
+    /// Returns all JsValues referened by this effect. (Intended for debugging purposes.)
     pub fn values(&self) -> Vec<&JsValue> {
         match self {
             Effect::Call { func, args, .. } => {

@@ -1018,10 +1018,12 @@ pub async fn analyse_ecmascript_module_internal(
                 }
             }
         }
-        let scale = 150f32 / (*histogram.iter().max().unwrap() as f32);
-        for (i, count) in histogram.into_iter().enumerate() {
-            let bar = "*".repeat((count as f32 * scale) as usize);
-            println!("{i:3}: {bar} ({count})");
+        if !histogram.is_empty() {
+            let scale = 150f32 / (*histogram.iter().max().unwrap() as f32);
+            for (i, count) in histogram.into_iter().enumerate() {
+                let bar = "*".repeat((count as f32 * scale) as usize);
+                println!("{i:3}: {bar} ({count})");
+            }
         }
     }
 
