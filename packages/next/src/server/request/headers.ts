@@ -42,6 +42,18 @@ export function headers(): Promise<ReadonlyHeaders> {
   const workStore = workAsyncStorage.getStore()
   const workUnitStore = workUnitAsyncStorage.getStore()
 
+  // Check if we're in request.ts (static-only context)
+  if (workUnitStore?.disallowDynamicInRequestContext) {
+    throw new Error(
+      `Cannot call headers() inside request.ts.\n\n` +
+        `request.ts must only use static inputs (params, pathname) to ensure ` +
+        `routes can be statically generated.\n\n` +
+        `For dynamic data based on headers, either:\n` +
+        `  - Use middleware to process headers and pass data via rewrites/cookies\n` +
+        `  - Read headers directly in the component that needs them\n`
+    )
+  }
+
   if (workStore) {
     if (
       workUnitStore &&

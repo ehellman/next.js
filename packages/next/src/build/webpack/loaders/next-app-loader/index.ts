@@ -81,6 +81,7 @@ const FILE_TYPES = {
   loading: 'loading',
   'global-error': 'global-error',
   'global-not-found': 'global-not-found',
+  request: 'request',
   ...HTTP_ACCESS_FALLBACKS,
 } as const
 

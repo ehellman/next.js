@@ -35,6 +35,18 @@ export function cookies(): Promise<ReadonlyRequestCookies> {
   const workStore = workAsyncStorage.getStore()
   const workUnitStore = workUnitAsyncStorage.getStore()
 
+  // Check if we're in request.ts (static-only context)
+  if (workUnitStore?.disallowDynamicInRequestContext) {
+    throw new Error(
+      `Cannot call cookies() inside request.ts.\n\n` +
+        `request.ts must only use static inputs (params, pathname) to ensure ` +
+        `routes can be statically generated.\n\n` +
+        `For dynamic data based on cookies, either:\n` +
+        `  - Use middleware to process cookies and pass data via rewrites\n` +
+        `  - Read cookies directly in the component that needs them\n`
+    )
+  }
+
   if (workStore) {
     if (
       workUnitStore &&

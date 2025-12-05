@@ -20,3 +20,5 @@ export { ImageResponse } from 'next/dist/server/web/spec-extension/image-respons
 export type { ImageResponseOptions } from 'next/dist/compiled/@vercel/og/types'
 export { after } from 'next/dist/server/after'
 export { connection } from 'next/dist/server/request/connection'
+export { getRequestContext } from 'next/dist/server/app-render/request-context-storage'
+export type { RequestContextInput } from 'next/dist/server/request/request-context'

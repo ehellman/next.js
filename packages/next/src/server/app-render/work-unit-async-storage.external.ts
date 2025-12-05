@@ -27,6 +27,11 @@ export interface CommonWorkUnitStore {
   /** NOTE: Will be mutated as phases change */
   phase: WorkUnitPhase
   readonly implicitTags: ImplicitTags
+  /**
+   * When true, calls to headers()/cookies() will throw.
+   * Used during request.ts execution to enforce static-only access.
+   */
+  disallowDynamicInRequestContext?: boolean
 }
 
 export interface RequestStore extends CommonWorkUnitStore {

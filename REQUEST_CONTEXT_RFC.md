@@ -22,22 +22,23 @@ Currently, there's no way to run code "above" the root layout that executes on e
 
 ### Use Cases
 
-| Use Case | Current Workaround | Problem with Workaround |
-|----------|-------------------|------------------------|
-| Multi-market/channel config | Prop drill from layout | Doesn't work on client nav; verbose |
-| Feature flags (route-based) | Read headers | Forces dynamic rendering |
-| Tenant configuration | Prop drill or headers | Same as above |
-| Request-scoped telemetry | Middleware + headers | Forces dynamic; spans don't flow to RSC |
-| i18n/locale setup | Prop drill from layout | Doesn't work on client nav |
-| A/B test bucketing | Headers/cookies | Forces dynamic rendering |
-| Database connection routing | Prop drill | Verbose; error-prone |
-| Cache key scoping | Manual in each component | Repetitive; easy to forget |
+| Use Case                    | Current Workaround       | Problem with Workaround                 |
+| --------------------------- | ------------------------ | --------------------------------------- |
+| Multi-market/channel config | Prop drill from layout   | Doesn't work on client nav; verbose     |
+| Feature flags (route-based) | Read headers             | Forces dynamic rendering                |
+| Tenant configuration        | Prop drill or headers    | Same as above                           |
+| Request-scoped telemetry    | Middleware + headers     | Forces dynamic; spans don't flow to RSC |
+| i18n/locale setup           | Prop drill from layout   | Doesn't work on client nav              |
+| A/B test bucketing          | Headers/cookies          | Forces dynamic rendering                |
+| Database connection routing | Prop drill               | Verbose; error-prone                    |
+| Cache key scoping           | Manual in each component | Repetitive; easy to forget              |
 
 ### Key Insight
 
 All these use cases share a pattern: **data derived from static inputs (URL, route params) that needs to be globally available during a request**.
 
 This data:
+
 - Is deterministic given the URL
 - Doesn't depend on dynamic request data (headers, cookies)
 - Should be available in every server component
@@ -160,6 +161,7 @@ Request arrives
 ```
 
 This means:
+
 - Components that don't need request context render immediately
 - Components that need it suspend (via the returned promise)
 - Other branches of the tree continue rendering in parallel
@@ -169,13 +171,13 @@ This means:
 
 **Critical**: `request.ts` enforces static-only inputs. Dynamic APIs throw errors.
 
-| Input | Allowed | Notes |
-|-------|---------|-------|
-| `params` | ✅ Yes | Route params are known at build time for static routes |
-| `pathname` | ✅ Yes | Deterministic from URL |
-| `headers()` | ❌ Throws | Use middleware for dynamic data |
-| `cookies()` | ❌ Throws | Use middleware for dynamic data |
-| `searchParams` | ❌ No | Could be added later with careful consideration |
+| Input          | Allowed   | Notes                                                  |
+| -------------- | --------- | ------------------------------------------------------ |
+| `params`       | ✅ Yes    | Route params are known at build time for static routes |
+| `pathname`     | ✅ Yes    | Deterministic from URL                                 |
+| `headers()`    | ❌ Throws | Use middleware for dynamic data                        |
+| `cookies()`    | ❌ Throws | Use middleware for dynamic data                        |
+| `searchParams` | ❌ No     | Could be added later with careful consideration        |
 
 ```typescript
 // app/request.ts
@@ -246,7 +248,7 @@ export interface RequestContextInput {
 
 export interface RequestContextStore<T = unknown> {
   promise: Promise<T>
-  resolved?: T  // Cached after resolution for sync access
+  resolved?: T // Cached after resolution for sync access
   pathname: string
 }
 ```
@@ -259,7 +261,8 @@ export interface RequestContextStore<T = unknown> {
 import { AsyncLocalStorage } from 'async_hooks'
 import type { RequestContextStore } from '../request/request-context'
 
-export const requestContextStorage = new AsyncLocalStorage<RequestContextStore>()
+export const requestContextStorage =
+  new AsyncLocalStorage<RequestContextStore>()
 
 /**
  * Get the request context. Returns a promise that resolves when request.ts completes.
@@ -270,7 +273,7 @@ export async function getRequestContext<T = unknown>(): Promise<T> {
   if (!store) {
     throw new Error(
       'getRequestContext() can only be called during request rendering. ' +
-      'Make sure you have a request.ts file in your app directory.'
+        'Make sure you have a request.ts file in your app directory.'
     )
   }
 
@@ -309,7 +312,7 @@ const FILE_TYPES = {
   loading: 'loading',
   'global-error': 'global-error',
   'global-not-found': 'global-not-found',
-  request: 'request',  // NEW
+  request: 'request', // NEW
   ...HTTP_ACCESS_FALLBACKS,
 } as const
 ```
@@ -334,13 +337,18 @@ In the file discovery logic, include `request.ts`/`request.js` alongside other c
 
 ```typescript
 import type { LoaderTree } from '../lib/app-dir-module'
-import type { RequestContextInput, RequestContextStore } from '../request/request-context'
+import type {
+  RequestContextInput,
+  RequestContextStore,
+} from '../request/request-context'
 import { requestContextStorage } from './request-context-storage'
 
 /**
  * Collect all request.ts modules from root to the target segment.
  */
-function collectRequestModules(tree: LoaderTree): Array<ModuleTuple | undefined> {
+function collectRequestModules(
+  tree: LoaderTree
+): Array<ModuleTuple | undefined> {
   const modules: Array<ModuleTuple | undefined> = []
 
   let current: LoaderTree | undefined = tree
@@ -393,7 +401,7 @@ async function executeInStaticContext<T>(fn: () => Promise<T>): Promise<T> {
   // Implementation: Set a flag in workUnitAsyncStorage that causes
   // headers()/cookies() to throw when accessed
   // This leverages existing Next.js infrastructure for tracking dynamic access
-  return fn()  // TODO: Add restriction wrapper
+  return fn() // TODO: Add restriction wrapper
 }
 ```
 
@@ -404,19 +412,15 @@ async function executeInStaticContext<T>(fn: () => Promise<T>): Promise<T> {
 **Location**: Inside `renderToHTMLOrFlightImpl`, near the start.
 
 ```typescript
-async function renderToHTMLOrFlightImpl(
+async function renderToHTMLOrFlightImpl() {
   // ... existing params
-) {
   // ... existing setup code
 
   // Start request context execution (non-blocking)
-  const requestContextPromise = startRequestContextExecution(
-    loaderTree,
-    {
-      params: interpolatedParams,
-      pathname: url.pathname,
-    }
-  )
+  const requestContextPromise = startRequestContextExecution(loaderTree, {
+    params: interpolatedParams,
+    pathname: url.pathname,
+  })
 
   // Create the store with the promise (not awaited)
   const requestContextStore: RequestContextStore = {
@@ -441,7 +445,9 @@ async function renderToHTMLOrFlightImpl(
 ```typescript
 async function generateDynamicRSCPayload(
   ctx: AppRenderContext,
-  options?: { /* ... */ }
+  options?: {
+    /* ... */
+  }
 ): Promise<RSCPayload> {
   const {
     componentMod: {
@@ -456,13 +462,10 @@ async function generateDynamicRSCPayload(
   const params = extractParamsFromContext(ctx)
 
   // Start request context execution (non-blocking)
-  const requestContextPromise = startRequestContextExecution(
-    loaderTree,
-    {
-      params,
-      pathname: url.pathname,
-    }
-  )
+  const requestContextPromise = startRequestContextExecution(loaderTree, {
+    params,
+    pathname: url.pathname,
+  })
 
   const requestContextStore: RequestContextStore = {
     promise: requestContextPromise,
@@ -514,8 +517,8 @@ export async function headers() {
   if (workUnitStore?.disallowDynamicInRequestContext) {
     throw new Error(
       'Cannot call headers() inside request.ts. ' +
-      'request.ts must only use static inputs (params, pathname). ' +
-      'For dynamic data, use middleware or read headers in your components.'
+        'request.ts must only use static inputs (params, pathname). ' +
+        'For dynamic data, use middleware or read headers in your components.'
     )
   }
 
@@ -621,15 +624,15 @@ test/e2e/app-dir/request-context/
 
 ## Alternative Names Considered
 
-| Name | Pros | Cons |
-|------|------|------|
-| `request.ts` | Clear purpose; matches HTTP concept | Might confuse with Request object |
-| `context.ts` | React-familiar | Too generic; conflicts with React Context |
-| `bootstrap.ts` | Clear "runs first" semantics | Not web-specific |
-| `setup.ts` | Clear purpose | Generic |
-| `preload.ts` | Indicates early execution | Conflicts with resource preloading |
-| `scope.ts` | Indicates request scope | Not intuitive |
-| `init.ts` | Clear initialization | Too generic |
+| Name           | Pros                                | Cons                                      |
+| -------------- | ----------------------------------- | ----------------------------------------- |
+| `request.ts`   | Clear purpose; matches HTTP concept | Might confuse with Request object         |
+| `context.ts`   | React-familiar                      | Too generic; conflicts with React Context |
+| `bootstrap.ts` | Clear "runs first" semantics        | Not web-specific                          |
+| `setup.ts`     | Clear purpose                       | Generic                                   |
+| `preload.ts`   | Indicates early execution           | Conflicts with resource preloading        |
+| `scope.ts`     | Indicates request scope             | Not intuitive                             |
+| `init.ts`      | Clear initialization                | Too generic                               |
 
 **Recommendation**: `request.ts` - it clearly indicates this runs per-request and aligns with web platform terminology.
 
@@ -663,14 +666,14 @@ test/e2e/app-dir/request-context/
 
 ## Timeline Estimate
 
-| Phase | Effort | Dependencies |
-|-------|--------|--------------|
-| Phase 1: Core Infrastructure | 2-3 days | None |
-| Phase 2: Build-Time Integration | 3-4 days | Phase 1 |
-| Phase 3: Runtime Integration | 5-6 days | Phase 1, 2 |
-| Phase 4: TypeScript Support | 1-2 days | Phase 1 |
-| Phase 5: Testing | 4-5 days | Phase 1-4 |
-| Phase 6: Documentation | 2-3 days | Phase 1-5 |
+| Phase                           | Effort   | Dependencies |
+| ------------------------------- | -------- | ------------ |
+| Phase 1: Core Infrastructure    | 2-3 days | None         |
+| Phase 2: Build-Time Integration | 3-4 days | Phase 1      |
+| Phase 3: Runtime Integration    | 5-6 days | Phase 1, 2   |
+| Phase 4: TypeScript Support     | 1-2 days | Phase 1      |
+| Phase 5: Testing                | 4-5 days | Phase 1-4    |
+| Phase 6: Documentation          | 2-3 days | Phase 1-5    |
 
 **Total: ~3-4 weeks**
 

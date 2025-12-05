@@ -20,6 +20,9 @@ import type {
   PrerenderStoreModernRuntime,
   RequestStore,
 } from '../app-render/work-unit-async-storage.external'
+import { requestContextStorage } from '../app-render/request-context-storage'
+import type { RequestContextStore } from '../request/request-context'
+import { startRequestContextExecution } from '../app-render/execute-request-context'
 import type { NextParsedUrlQuery } from '../request-meta'
 import type { LoaderTree } from '../lib/app-dir-module'
 import type { AppPageModule } from '../route-modules/app-page/module'
@@ -444,6 +447,33 @@ function NonIndex({
 }
 
 /**
+ * Helper to extract params from loader tree for RSC requests.
+ */
+function extractParamsFromLoaderTree(
+  loaderTree: LoaderTree,
+  getDynamicParamFromSegment: GetDynamicParamFromSegment
+): Record<string, string | string[]> {
+  const params: Record<string, string | string[]> = {}
+
+  let current: LoaderTree | undefined = loaderTree
+  while (current) {
+    const segment = current[0]
+    const parallelRoutes = current[1] as any
+
+    // Extract dynamic param from segment if present
+    const param = getDynamicParamFromSegment(segment)
+    if (param && param.value !== null) {
+      params[param.param] = param.value
+    }
+
+    // Follow the 'children' parallel route (main route)
+    current = parallelRoutes.children
+  }
+
+  return params
+}
+
+/**
  * This is used by server actions & client-side navigations to generate RSC data from a client-side request.
  * This function is only called on "dynamic" requests (ie, there wasn't already a static response).
  * It uses request headers (namely `next-router-state-tree`) to determine where to start rendering.
@@ -456,111 +486,132 @@ async function generateDynamicRSCPayload(
     runtimePrefetchSentinel?: number
   }
 ): Promise<RSCPayload> {
-  // Flight data that is going to be passed to the browser.
-  // Currently a single item array but in the future multiple patches might be combined in a single request.
-
-  // We initialize `flightData` to an empty string because the client router knows how to tolerate
-  // it (treating it as an MPA navigation). The only time this function wouldn't generate flight data
-  // is for server actions, if the server action handler instructs this function to skip it. When the server
-  // action reducer sees a falsy value, it'll simply resolve the action with no data.
-  let flightData: FlightData = ''
-
   const {
     componentMod: {
       routeModule: {
         userland: { loaderTree },
       },
-      createElement,
-      createMetadataComponents,
-      Fragment,
     },
     getDynamicParamFromSegment,
-    query,
-    requestId,
-    flightRouterState,
-    workStore,
     url,
   } = ctx
 
-  const serveStreamingMetadata = !!ctx.renderOpts.serveStreamingMetadata
+  // Extract params from the loader tree for request context
+  const params = extractParamsFromLoaderTree(
+    loaderTree,
+    getDynamicParamFromSegment
+  )
 
-  if (!options?.skipPageRendering) {
-    const preloadCallbacks: PreloadCallbacks = []
+  // Start request context execution (non-blocking)
+  const requestContextPromise = startRequestContextExecution(loaderTree, {
+    params,
+    pathname: url.pathname,
+  })
 
-    const { Viewport, Metadata, MetadataOutlet } = createMetadataComponents({
-      tree: loaderTree,
-      parsedQuery: query,
-      pathname: url.pathname,
-      metadataContext: createMetadataContext(ctx.renderOpts),
-      getDynamicParamFromSegment,
+  const requestContextStore: RequestContextStore = {
+    promise: requestContextPromise,
+    pathname: url.pathname,
+  }
+
+  // Wrap RSC generation in request context
+  return requestContextStorage.run(requestContextStore, async () => {
+    // Flight data that is going to be passed to the browser.
+    // Currently a single item array but in the future multiple patches might be combined in a single request.
+
+    // We initialize `flightData` to an empty string because the client router knows how to tolerate
+    // it (treating it as an MPA navigation). The only time this function wouldn't generate flight data
+    // is for server actions, if the server action handler instructs this function to skip it. When the server
+    // action reducer sees a falsy value, it'll simply resolve the action with no data.
+    let flightData: FlightData = ''
+
+    const {
+      componentMod: { createElement, createMetadataComponents, Fragment },
+      query,
+      requestId,
+      flightRouterState,
       workStore,
-      serveStreamingMetadata,
-    })
+    } = ctx
 
-    flightData = (
-      await walkTreeWithFlightRouterState({
-        ctx,
-        loaderTreeToFilter: loaderTree,
-        parentParams: {},
-        flightRouterState,
-        // For flight, render metadata inside leaf page
-        rscHead: createElement(
-          Fragment,
-          {
-            key: flightDataPathHeadKey,
-          },
-          createElement(NonIndex, {
-            createElement,
-            pagePath: ctx.pagePath,
-            statusCode: ctx.res.statusCode,
-            isPossibleServerAction: ctx.isPossibleServerAction,
-          }),
-          createElement(Viewport, {
-            key: getFlightViewportKey(requestId),
-          }),
-          createElement(Metadata, {
-            key: getFlightMetadataKey(requestId),
-          })
-        ),
-        injectedCSS: new Set(),
-        injectedJS: new Set(),
-        injectedFontPreloadTags: new Set(),
-        rootLayoutIncluded: false,
-        preloadCallbacks,
-        MetadataOutlet,
+    const serveStreamingMetadata = !!ctx.renderOpts.serveStreamingMetadata
+
+    if (!options?.skipPageRendering) {
+      const preloadCallbacks: PreloadCallbacks = []
+
+      const { Viewport, Metadata, MetadataOutlet } = createMetadataComponents({
+        tree: loaderTree,
+        parsedQuery: query,
+        pathname: url.pathname,
+        metadataContext: createMetadataContext(ctx.renderOpts),
+        getDynamicParamFromSegment,
+        workStore,
+        serveStreamingMetadata,
       })
-    ).map((path) => path.slice(1)) // remove the '' (root) segment
-  }
 
-  // If we have an action result, then this is a server action response.
-  // We can rely on this because `ActionResult` will always be a promise, even if
-  // the result is falsey.
-  if (options?.actionResult) {
-    return {
-      a: options.actionResult,
-      f: flightData,
+      flightData = (
+        await walkTreeWithFlightRouterState({
+          ctx,
+          loaderTreeToFilter: loaderTree,
+          parentParams: {},
+          flightRouterState,
+          // For flight, render metadata inside leaf page
+          rscHead: createElement(
+            Fragment,
+            {
+              key: flightDataPathHeadKey,
+            },
+            createElement(NonIndex, {
+              createElement,
+              pagePath: ctx.pagePath,
+              statusCode: ctx.res.statusCode,
+              isPossibleServerAction: ctx.isPossibleServerAction,
+            }),
+            createElement(Viewport, {
+              key: getFlightViewportKey(requestId),
+            }),
+            createElement(Metadata, {
+              key: getFlightMetadataKey(requestId),
+            })
+          ),
+          injectedCSS: new Set(),
+          injectedJS: new Set(),
+          injectedFontPreloadTags: new Set(),
+          rootLayoutIncluded: false,
+          preloadCallbacks,
+          MetadataOutlet,
+        })
+      ).map((path) => path.slice(1)) // remove the '' (root) segment
+    }
+
+    // If we have an action result, then this is a server action response.
+    // We can rely on this because `ActionResult` will always be a promise, even if
+    // the result is falsey.
+    if (options?.actionResult) {
+      return {
+        a: options.actionResult,
+        f: flightData,
+        b: ctx.sharedContext.buildId,
+      }
+    }
+
+    // Otherwise, it's a regular RSC response.
+    const baseResponse = {
       b: ctx.sharedContext.buildId,
+      f: flightData,
+      S: workStore.isStaticGeneration,
     }
-  }
 
-  // Otherwise, it's a regular RSC response.
-  const baseResponse = {
-    b: ctx.sharedContext.buildId,
-    f: flightData,
-    S: workStore.isStaticGeneration,
-  }
-
-  // For runtime prefetches, we encode the stale time and isPartial flag in the response body
-  // rather than relying on response headers. Both of these values will be transformed
-  // by a transform stream before being sent to the client.
-  if (options?.runtimePrefetchSentinel !== undefined) {
-    return {
-      ...baseResponse,
-      rp: [options.runtimePrefetchSentinel] as any,
+    // For runtime prefetches, we encode the stale time and isPartial flag in the response body
+    // rather than relying on response headers. Both of these values will be transformed
+    // by a transform stream before being sent to the client.
+    if (options?.runtimePrefetchSentinel !== undefined) {
+      return {
+        ...baseResponse,
+        rp: [options.runtimePrefetchSentinel] as any,
+      }
     }
-  }
 
-  return baseResponse
+    return baseResponse
+  })
 }
 
 function createErrorContext(
@@ -1826,496 +1877,523 @@ async function renderToHTMLOrFlightImpl(
     cacheComponents,
   } = renderOpts
 
-  // We need to expose the bundled `require` API globally for
-  // react-server-dom-webpack. This is a hack until we find a better way.
-  if (ComponentMod.__next_app__) {
-    const instrumented = wrapClientComponentLoader(ComponentMod)
+  const loaderTree1 = ComponentMod.routeModule.userland.loaderTree
 
-    // When we are prerendering if there is a cacheSignal for tracking
-    // cache reads we track calls to `loadChunk` and `require`. This allows us
-    // to treat chunk/module loading with similar semantics as cache reads to avoid
-    // module loading from causing a prerender to abort too early.
+  // Start request context execution (non-blocking - returns promise, doesn't await)
+  // Filter out undefined values from params for request context
+  const filteredParams: Record<string, string | string[]> = {}
+  for (const [key, value] of Object.entries(interpolatedParams)) {
+    if (value !== undefined) {
+      filteredParams[key] = value
+    }
+  }
+  const requestContextPromise = startRequestContextExecution(loaderTree1, {
+    params: filteredParams,
+    pathname: url.pathname,
+  })
 
-    const shouldTrackModuleLoading = () => {
-      if (!cacheComponents) {
-        return false
-      }
-      if (renderOpts.dev) {
-        return true
-      }
-      const workUnitStore = workUnitAsyncStorage.getStore()
+  // Create the store with the promise (not awaited)
+  const requestContextStore: RequestContextStore = {
+    promise: requestContextPromise,
+    pathname: url.pathname,
+  }
 
-      if (!workUnitStore) {
-        return false
-      }
+  // Wrap all remaining rendering logic in the request context storage
+  return requestContextStorage.run(requestContextStore, async () => {
+    // We need to expose the bundled `require` API globally for
+    // react-server-dom-webpack. This is a hack until we find a better way.
+    if (ComponentMod.__next_app__) {
+      const instrumented = wrapClientComponentLoader(ComponentMod)
 
-      switch (workUnitStore.type) {
-        case 'prerender':
-        case 'prerender-client':
-        case 'prerender-runtime':
-        case 'cache':
-        case 'private-cache':
-          return true
-        case 'prerender-ppr':
-        case 'prerender-legacy':
-        case 'request':
-        case 'unstable-cache':
+      // When we are prerendering if there is a cacheSignal for tracking
+      // cache reads we track calls to `loadChunk` and `require`. This allows us
+      // to treat chunk/module loading with similar semantics as cache reads to avoid
+      // module loading from causing a prerender to abort too early.
+
+      const shouldTrackModuleLoading = () => {
+        if (!cacheComponents) {
           return false
-        default:
-          workUnitStore satisfies never
-      }
-    }
+        }
+        if (renderOpts.dev) {
+          return true
+        }
+        const workUnitStore = workUnitAsyncStorage.getStore()
 
-    const __next_require__: typeof instrumented.require = (...args) => {
-      const exportsOrPromise = instrumented.require(...args)
-      if (shouldTrackModuleLoading()) {
-        // requiring an async module returns a promise.
-        trackPendingImport(exportsOrPromise)
-      }
-      return exportsOrPromise
-    }
-    // @ts-expect-error
-    globalThis.__next_require__ = __next_require__
+        if (!workUnitStore) {
+          return false
+        }
 
-    const __next_chunk_load__: typeof instrumented.loadChunk = (...args) => {
-      const loadingChunk = instrumented.loadChunk(...args)
-      if (shouldTrackModuleLoading()) {
-        trackPendingChunkLoad(loadingChunk)
-      }
-      return loadingChunk
-    }
-    // @ts-expect-error
-    globalThis.__next_chunk_load__ = __next_chunk_load__
-  }
-
-  if (
-    process.env.NODE_ENV === 'development' &&
-    renderOpts.setIsrStatus &&
-    !cacheComponents
-  ) {
-    // Reset the ISR status at start of request.
-    const { pathname } = new URL(req.url || '/', 'http://n')
-    renderOpts.setIsrStatus(
-      pathname,
-      // Only pages using the Node runtime can use ISR, Edge is always dynamic.
-      process.env.NEXT_RUNTIME === 'edge' ? false : undefined
-    )
-  }
-
-  if (
-    // The type check here ensures that `req` is correctly typed, and the
-    // environment variable check provides dead code elimination.
-    process.env.NEXT_RUNTIME !== 'edge' &&
-    isNodeNextRequest(req)
-  ) {
-    res.onClose(() => {
-      // We stop tracking fetch metrics when the response closes, since we
-      // report them at that time.
-      workStore.shouldTrackFetchMetrics = false
-    })
-
-    req.originalRequest.on('end', () => {
-      if ('performance' in globalThis) {
-        const metrics = getClientComponentLoaderMetrics({ reset: true })
-        if (metrics) {
-          getTracer()
-            .startSpan(NextNodeServerSpan.clientComponentLoading, {
-              startTime: metrics.clientComponentLoadStart,
-              attributes: {
-                'next.clientComponentLoadCount':
-                  metrics.clientComponentLoadCount,
-                'next.span_type': NextNodeServerSpan.clientComponentLoading,
-              },
-            })
-            .end(
-              metrics.clientComponentLoadStart +
-                metrics.clientComponentLoadTimes
-            )
+        switch (workUnitStore.type) {
+          case 'prerender':
+          case 'prerender-client':
+          case 'prerender-runtime':
+          case 'cache':
+          case 'private-cache':
+            return true
+          case 'prerender-ppr':
+          case 'prerender-legacy':
+          case 'request':
+          case 'unstable-cache':
+            return false
+          default:
+            workUnitStore satisfies never
         }
       }
-    })
-  }
 
-  const metadata: AppPageRenderResultMetadata = {
-    statusCode: isNotFoundPath ? 404 : undefined,
-  }
-
-  const appUsingSizeAdjustment = !!nextFontManifest?.appUsingSizeAdjust
-
-  ComponentMod.patchFetch()
-
-  // Pull out the hooks/references from the component.
-  const {
-    routeModule: {
-      userland: { loaderTree },
-    },
-    taintObjectReference,
-  } = ComponentMod
-  if (enableTainting) {
-    taintObjectReference(
-      'Do not pass process.env to Client Components since it will leak sensitive data',
-      process.env
-    )
-  }
-
-  workStore.fetchMetrics = []
-  metadata.fetchMetrics = workStore.fetchMetrics
-
-  // don't modify original query object
-  query = { ...query }
-  stripInternalQueries(query)
-
-  const { isStaticGeneration } = workStore
-
-  let requestId: string
-  let htmlRequestId: string
-
-  const {
-    flightRouterState,
-    isPrefetchRequest,
-    isRuntimePrefetchRequest,
-    isRSCRequest,
-    isHmrRefresh,
-    nonce,
-  } = parsedRequestHeaders
-
-  if (parsedRequestHeaders.requestId) {
-    // If the client has provided a request ID (in development mode), we use it.
-    requestId = parsedRequestHeaders.requestId
-  } else {
-    // Otherwise we generate a new request ID.
-    if (isStaticGeneration) {
-      requestId = Buffer.from(
-        await crypto.subtle.digest('SHA-1', Buffer.from(req.url))
-      ).toString('hex')
-    } else if (process.env.NEXT_RUNTIME === 'edge') {
-      requestId = crypto.randomUUID()
-    } else {
-      requestId = (
-        require('next/dist/compiled/nanoid') as typeof import('next/dist/compiled/nanoid')
-      ).nanoid()
-    }
-  }
-
-  // If the client has provided an HTML request ID, we use it to associate the
-  // request with the HTML document from which it originated, which is used to
-  // send debug information to the associated WebSocket client. Otherwise, this
-  // is the request for the HTML document, so we use the request ID also as the
-  // HTML request ID.
-  htmlRequestId = parsedRequestHeaders.htmlRequestId || requestId
-
-  const getDynamicParamFromSegment = makeGetDynamicParamFromSegment(
-    interpolatedParams,
-    fallbackRouteParams
-  )
-
-  const isPossibleActionRequest = getIsPossibleServerAction(req)
-
-  const implicitTags = await getImplicitTags(
-    workStore.page,
-    url,
-    fallbackRouteParams
-  )
-
-  const ctx: AppRenderContext = {
-    componentMod: ComponentMod,
-    url,
-    renderOpts,
-    workStore,
-    parsedRequestHeaders,
-    getDynamicParamFromSegment,
-    query,
-    isPrefetch: isPrefetchRequest,
-    isPossibleServerAction: isPossibleActionRequest,
-    requestTimestamp,
-    appUsingSizeAdjustment,
-    flightRouterState,
-    requestId,
-    htmlRequestId,
-    pagePath,
-    assetPrefix,
-    isNotFoundPath,
-    nonce,
-    res,
-    sharedContext,
-    implicitTags,
-  }
-
-  getTracer().setRootSpanAttribute('next.route', pagePath)
-
-  if (isStaticGeneration) {
-    // We're either building or revalidating. In either case we need to
-    // prerender our page rather than render it.
-    const prerenderToStreamWithTracing = getTracer().wrap(
-      AppRenderSpan.getBodyResult,
-      {
-        spanName: `prerender route (app) ${pagePath}`,
-        attributes: {
-          'next.route': pagePath,
-        },
-      },
-      prerenderToStream
-    )
-
-    const response = await prerenderToStreamWithTracing(
-      req,
-      res,
-      ctx,
-      metadata,
-      loaderTree,
-      fallbackRouteParams
-    )
-
-    // If we're debugging partial prerendering, print all the dynamic API accesses
-    // that occurred during the render.
-    // @TODO move into renderToStream function
-    if (
-      response.dynamicAccess &&
-      accessedDynamicData(response.dynamicAccess) &&
-      renderOpts.isDebugDynamicAccesses
-    ) {
-      warn('The following dynamic usage was detected:')
-      for (const access of formatDynamicAPIAccesses(response.dynamicAccess)) {
-        warn(access)
-      }
-    }
-
-    // If we encountered any unexpected errors during build we fail the
-    // prerendering phase and the build.
-    if (workStore.invalidDynamicUsageError) {
-      logDisallowedDynamicError(workStore, workStore.invalidDynamicUsageError)
-      throw new StaticGenBailoutError()
-    }
-    if (response.digestErrorsMap.size) {
-      const buildFailingError = response.digestErrorsMap.values().next().value
-      if (buildFailingError) throw buildFailingError
-    }
-    // Pick first userland SSR error, which is also not a RSC error.
-    if (response.ssrErrors.length) {
-      const buildFailingError = response.ssrErrors.find((err) =>
-        isUserLandError(err)
-      )
-      if (buildFailingError) throw buildFailingError
-    }
-
-    const options: RenderResultOptions = {
-      metadata,
-      contentType: HTML_CONTENT_TYPE_HEADER,
-    }
-    // If we have pending revalidates, wait until they are all resolved.
-    if (
-      workStore.pendingRevalidates ||
-      workStore.pendingRevalidateWrites ||
-      workStore.pendingRevalidatedTags
-    ) {
-      const pendingPromise = executeRevalidates(workStore).finally(() => {
-        if (process.env.NEXT_PRIVATE_DEBUG_CACHE) {
-          console.log('pending revalidates promise finished for:', url)
+      const __next_require__: typeof instrumented.require = (...args) => {
+        const exportsOrPromise = instrumented.require(...args)
+        if (shouldTrackModuleLoading()) {
+          // requiring an async module returns a promise.
+          trackPendingImport(exportsOrPromise)
         }
-      })
-
-      if (renderOpts.waitUntil) {
-        renderOpts.waitUntil(pendingPromise)
-      } else {
-        options.waitUntil = pendingPromise
+        return exportsOrPromise
       }
+      // @ts-expect-error
+      globalThis.__next_require__ = __next_require__
+
+      const __next_chunk_load__: typeof instrumented.loadChunk = (...args) => {
+        const loadingChunk = instrumented.loadChunk(...args)
+        if (shouldTrackModuleLoading()) {
+          trackPendingChunkLoad(loadingChunk)
+        }
+        return loadingChunk
+      }
+      // @ts-expect-error
+      globalThis.__next_chunk_load__ = __next_chunk_load__
     }
-
-    applyMetadataFromPrerenderResult(response, metadata, workStore)
-
-    if (response.renderResumeDataCache) {
-      metadata.renderResumeDataCache = response.renderResumeDataCache
-    }
-
-    return new RenderResult(await streamToString(response.stream), options)
-  } else {
-    // We're rendering dynamically
-    const renderResumeDataCache =
-      renderOpts.renderResumeDataCache ??
-      postponedState?.renderResumeDataCache ??
-      null
-
-    const rootParams = getRootParams(loaderTree, ctx.getDynamicParamFromSegment)
-    const devFallbackParams = getRequestMeta(req, 'devFallbackParams') || null
-
-    const createRequestStore = createRequestStoreForRender.bind(
-      null,
-      req,
-      res,
-      url,
-      rootParams,
-      implicitTags,
-      renderOpts.onUpdateCookies,
-      renderOpts.previewProps,
-      isHmrRefresh,
-      serverComponentsHmrCache,
-      renderResumeDataCache,
-      devFallbackParams
-    )
-    const requestStore = createRequestStore()
 
     if (
       process.env.NODE_ENV === 'development' &&
       renderOpts.setIsrStatus &&
-      !cacheComponents &&
-      // Only pages using the Node runtime can use ISR, so we only need to
-      // update the status for those.
+      !cacheComponents
+    ) {
+      // Reset the ISR status at start of request.
+      const { pathname } = new URL(req.url || '/', 'http://n')
+      renderOpts.setIsrStatus(
+        pathname,
+        // Only pages using the Node runtime can use ISR, Edge is always dynamic.
+        process.env.NEXT_RUNTIME === 'edge' ? false : undefined
+      )
+    }
+
+    if (
       // The type check here ensures that `req` is correctly typed, and the
       // environment variable check provides dead code elimination.
       process.env.NEXT_RUNTIME !== 'edge' &&
       isNodeNextRequest(req)
     ) {
-      const setIsrStatus = renderOpts.setIsrStatus
+      res.onClose(() => {
+        // We stop tracking fetch metrics when the response closes, since we
+        // report them at that time.
+        workStore.shouldTrackFetchMetrics = false
+      })
+
       req.originalRequest.on('end', () => {
-        const { pathname } = new URL(req.url || '/', 'http://n')
-        const isStatic = !requestStore.usedDynamic && !workStore.forceDynamic
-        setIsrStatus(pathname, isStatic)
+        if ('performance' in globalThis) {
+          const metrics = getClientComponentLoaderMetrics({ reset: true })
+          if (metrics) {
+            getTracer()
+              .startSpan(NextNodeServerSpan.clientComponentLoading, {
+                startTime: metrics.clientComponentLoadStart,
+                attributes: {
+                  'next.clientComponentLoadCount':
+                    metrics.clientComponentLoadCount,
+                  'next.span_type': NextNodeServerSpan.clientComponentLoading,
+                },
+              })
+              .end(
+                metrics.clientComponentLoadStart +
+                  metrics.clientComponentLoadTimes
+              )
+          }
+        }
       })
     }
 
-    if (isRSCRequest) {
-      if (isRuntimePrefetchRequest) {
-        return generateRuntimePrefetchResult(req, ctx, requestStore)
+    const metadata: AppPageRenderResultMetadata = {
+      statusCode: isNotFoundPath ? 404 : undefined,
+    }
+
+    const appUsingSizeAdjustment = !!nextFontManifest?.appUsingSizeAdjust
+
+    ComponentMod.patchFetch()
+
+    // Pull out the hooks/references from the component.
+    const {
+      routeModule: {
+        userland: { loaderTree },
+      },
+      taintObjectReference,
+    } = ComponentMod
+    if (enableTainting) {
+      taintObjectReference(
+        'Do not pass process.env to Client Components since it will leak sensitive data',
+        process.env
+      )
+    }
+
+    workStore.fetchMetrics = []
+    metadata.fetchMetrics = workStore.fetchMetrics
+
+    // don't modify original query object
+    query = { ...query }
+    stripInternalQueries(query)
+
+    const { isStaticGeneration } = workStore
+
+    let requestId: string
+    let htmlRequestId: string
+
+    const {
+      flightRouterState,
+      isPrefetchRequest,
+      isRuntimePrefetchRequest,
+      isRSCRequest,
+      isHmrRefresh,
+      nonce,
+    } = parsedRequestHeaders
+
+    if (parsedRequestHeaders.requestId) {
+      // If the client has provided a request ID (in development mode), we use it.
+      requestId = parsedRequestHeaders.requestId
+    } else {
+      // Otherwise we generate a new request ID.
+      if (isStaticGeneration) {
+        requestId = Buffer.from(
+          await crypto.subtle.digest('SHA-1', Buffer.from(req.url))
+        ).toString('hex')
+      } else if (process.env.NEXT_RUNTIME === 'edge') {
+        requestId = crypto.randomUUID()
       } else {
-        if (
-          process.env.NODE_ENV === 'development' &&
-          process.env.NEXT_RUNTIME !== 'edge' &&
-          cacheComponents
-        ) {
-          return generateDynamicFlightRenderResultWithStagesInDev(
-            req,
-            ctx,
-            requestStore,
-            createRequestStore,
-            devFallbackParams
-          )
-        } else {
-          return generateDynamicFlightRenderResult(req, ctx, requestStore)
-        }
+        requestId = (
+          require('next/dist/compiled/nanoid') as typeof import('next/dist/compiled/nanoid')
+        ).nanoid()
       }
     }
 
-    const renderToStreamWithTracing = getTracer().wrap(
-      AppRenderSpan.getBodyResult,
-      {
-        spanName: `render route (app) ${pagePath}`,
-        attributes: {
-          'next.route': pagePath,
-        },
-      },
-      renderToStream
+    // If the client has provided an HTML request ID, we use it to associate the
+    // request with the HTML document from which it originated, which is used to
+    // send debug information to the associated WebSocket client. Otherwise, this
+    // is the request for the HTML document, so we use the request ID also as the
+    // HTML request ID.
+    htmlRequestId = parsedRequestHeaders.htmlRequestId || requestId
+
+    const getDynamicParamFromSegment = makeGetDynamicParamFromSegment(
+      interpolatedParams,
+      fallbackRouteParams
     )
 
-    let didExecuteServerAction = false
-    let formState: null | any = null
-    if (isPossibleActionRequest) {
-      // For action requests, we don't want to use the resume data cache.
-      requestStore.renderResumeDataCache = null
+    const isPossibleActionRequest = getIsPossibleServerAction(req)
 
-      // For action requests, we handle them differently with a special render result.
-      const actionRequestResult = await handleAction({
+    const implicitTags = await getImplicitTags(
+      workStore.page,
+      url,
+      fallbackRouteParams
+    )
+
+    const ctx: AppRenderContext = {
+      componentMod: ComponentMod,
+      url,
+      renderOpts,
+      workStore,
+      parsedRequestHeaders,
+      getDynamicParamFromSegment,
+      query,
+      isPrefetch: isPrefetchRequest,
+      isPossibleServerAction: isPossibleActionRequest,
+      requestTimestamp,
+      appUsingSizeAdjustment,
+      flightRouterState,
+      requestId,
+      htmlRequestId,
+      pagePath,
+      assetPrefix,
+      isNotFoundPath,
+      nonce,
+      res,
+      sharedContext,
+      implicitTags,
+    }
+
+    getTracer().setRootSpanAttribute('next.route', pagePath)
+
+    if (isStaticGeneration) {
+      // We're either building or revalidating. In either case we need to
+      // prerender our page rather than render it.
+      const prerenderToStreamWithTracing = getTracer().wrap(
+        AppRenderSpan.getBodyResult,
+        {
+          spanName: `prerender route (app) ${pagePath}`,
+          attributes: {
+            'next.route': pagePath,
+          },
+        },
+        prerenderToStream
+      )
+
+      const response = await prerenderToStreamWithTracing(
         req,
         res,
-        ComponentMod,
-        generateFlight: generateDynamicFlightRenderResult,
-        workStore,
-        requestStore,
-        serverActions,
         ctx,
         metadata,
-      })
+        loaderTree,
+        fallbackRouteParams
+      )
 
-      if (actionRequestResult) {
-        if (actionRequestResult.type === 'not-found') {
-          const notFoundLoaderTree = createNotFoundLoaderTree(loaderTree)
-          res.statusCode = 404
-          metadata.statusCode = 404
-          const stream = await renderToStreamWithTracing(
-            requestStore,
-            req,
-            res,
-            ctx,
-            notFoundLoaderTree,
-            formState,
-            postponedState,
-            metadata,
-            undefined, // Prevent restartable-render behavior in dev + Cache Components mode
-            devFallbackParams
-          )
+      // If we're debugging partial prerendering, print all the dynamic API accesses
+      // that occurred during the render.
+      // @TODO move into renderToStream function
+      if (
+        response.dynamicAccess &&
+        accessedDynamicData(response.dynamicAccess) &&
+        renderOpts.isDebugDynamicAccesses
+      ) {
+        warn('The following dynamic usage was detected:')
+        for (const access of formatDynamicAPIAccesses(response.dynamicAccess)) {
+          warn(access)
+        }
+      }
 
-          return new RenderResult(stream, {
-            metadata,
-            contentType: HTML_CONTENT_TYPE_HEADER,
-          })
-        } else if (actionRequestResult.type === 'done') {
-          if (actionRequestResult.result) {
-            actionRequestResult.result.assignMetadata(metadata)
-            return actionRequestResult.result
-          } else if (actionRequestResult.formState) {
-            formState = actionRequestResult.formState
+      // If we encountered any unexpected errors during build we fail the
+      // prerendering phase and the build.
+      if (workStore.invalidDynamicUsageError) {
+        logDisallowedDynamicError(workStore, workStore.invalidDynamicUsageError)
+        throw new StaticGenBailoutError()
+      }
+      if (response.digestErrorsMap.size) {
+        const buildFailingError = response.digestErrorsMap.values().next().value
+        if (buildFailingError) throw buildFailingError
+      }
+      // Pick first userland SSR error, which is also not a RSC error.
+      if (response.ssrErrors.length) {
+        const buildFailingError = response.ssrErrors.find((err) =>
+          isUserLandError(err)
+        )
+        if (buildFailingError) throw buildFailingError
+      }
+
+      const options: RenderResultOptions = {
+        metadata,
+        contentType: HTML_CONTENT_TYPE_HEADER,
+      }
+      // If we have pending revalidates, wait until they are all resolved.
+      if (
+        workStore.pendingRevalidates ||
+        workStore.pendingRevalidateWrites ||
+        workStore.pendingRevalidatedTags
+      ) {
+        const pendingPromise = executeRevalidates(workStore).finally(() => {
+          if (process.env.NEXT_PRIVATE_DEBUG_CACHE) {
+            console.log('pending revalidates promise finished for:', url)
+          }
+        })
+
+        if (renderOpts.waitUntil) {
+          renderOpts.waitUntil(pendingPromise)
+        } else {
+          options.waitUntil = pendingPromise
+        }
+      }
+
+      applyMetadataFromPrerenderResult(response, metadata, workStore)
+
+      if (response.renderResumeDataCache) {
+        metadata.renderResumeDataCache = response.renderResumeDataCache
+      }
+
+      return new RenderResult(await streamToString(response.stream), options)
+    } else {
+      // We're rendering dynamically
+      const renderResumeDataCache =
+        renderOpts.renderResumeDataCache ??
+        postponedState?.renderResumeDataCache ??
+        null
+
+      const rootParams = getRootParams(
+        loaderTree,
+        ctx.getDynamicParamFromSegment
+      )
+      const devFallbackParams = getRequestMeta(req, 'devFallbackParams') || null
+
+      const createRequestStore = createRequestStoreForRender.bind(
+        null,
+        req,
+        res,
+        url,
+        rootParams,
+        implicitTags,
+        renderOpts.onUpdateCookies,
+        renderOpts.previewProps,
+        isHmrRefresh,
+        serverComponentsHmrCache,
+        renderResumeDataCache,
+        devFallbackParams
+      )
+      const requestStore = createRequestStore()
+
+      if (
+        process.env.NODE_ENV === 'development' &&
+        renderOpts.setIsrStatus &&
+        !cacheComponents &&
+        // Only pages using the Node runtime can use ISR, so we only need to
+        // update the status for those.
+        // The type check here ensures that `req` is correctly typed, and the
+        // environment variable check provides dead code elimination.
+        process.env.NEXT_RUNTIME !== 'edge' &&
+        isNodeNextRequest(req)
+      ) {
+        const setIsrStatus = renderOpts.setIsrStatus
+        req.originalRequest.on('end', () => {
+          const { pathname } = new URL(req.url || '/', 'http://n')
+          const isStatic = !requestStore.usedDynamic && !workStore.forceDynamic
+          setIsrStatus(pathname, isStatic)
+        })
+      }
+
+      if (isRSCRequest) {
+        if (isRuntimePrefetchRequest) {
+          return generateRuntimePrefetchResult(req, ctx, requestStore)
+        } else {
+          if (
+            process.env.NODE_ENV === 'development' &&
+            process.env.NEXT_RUNTIME !== 'edge' &&
+            cacheComponents
+          ) {
+            return generateDynamicFlightRenderResultWithStagesInDev(
+              req,
+              ctx,
+              requestStore,
+              createRequestStore,
+              devFallbackParams
+            )
+          } else {
+            return generateDynamicFlightRenderResult(req, ctx, requestStore)
           }
         }
       }
 
-      didExecuteServerAction = true
-      // Restore the resume data cache
-      requestStore.renderResumeDataCache = renderResumeDataCache
-    }
+      const renderToStreamWithTracing = getTracer().wrap(
+        AppRenderSpan.getBodyResult,
+        {
+          spanName: `render route (app) ${pagePath}`,
+          attributes: {
+            'next.route': pagePath,
+          },
+        },
+        renderToStream
+      )
 
-    const options: RenderResultOptions = {
-      metadata,
-      contentType: HTML_CONTENT_TYPE_HEADER,
-    }
+      let didExecuteServerAction = false
+      let formState: null | any = null
+      if (isPossibleActionRequest) {
+        // For action requests, we don't want to use the resume data cache.
+        requestStore.renderResumeDataCache = null
 
-    const stream = await renderToStreamWithTracing(
-      // NOTE: in Cache Components (dev), if the render is restarted, it will use a different requestStore
-      // than the one that we're passing in here.
-      requestStore,
-      req,
-      res,
-      ctx,
-      loaderTree,
-      formState,
-      postponedState,
-      metadata,
-      // If we're rendering HTML after an action, we don't want restartable-render behavior
-      // because the result should be dynamic, like it is in prod.
-      // Also, the request store might have been mutated by the action (e.g. enabling draftMode)
-      // and we currently we don't copy changes over when creating a new store,
-      // so the restarted render wouldn't be correct.
-      didExecuteServerAction ? undefined : createRequestStore,
-      devFallbackParams
-    )
+        // For action requests, we handle them differently with a special render result.
+        const actionRequestResult = await handleAction({
+          req,
+          res,
+          ComponentMod,
+          generateFlight: generateDynamicFlightRenderResult,
+          workStore,
+          requestStore,
+          serverActions,
+          ctx,
+          metadata,
+        })
 
-    // Invalid dynamic usages should only error the request in development.
-    // In production, it's better to produce a result.
-    // (the dynamic error will still be thrown inside the component tree, but it's catchable by error boundaries)
-    if (workStore.invalidDynamicUsageError && workStore.dev) {
-      throw workStore.invalidDynamicUsageError
-    }
+        if (actionRequestResult) {
+          if (actionRequestResult.type === 'not-found') {
+            const notFoundLoaderTree = createNotFoundLoaderTree(loaderTree)
+            res.statusCode = 404
+            metadata.statusCode = 404
+            const stream = await renderToStreamWithTracing(
+              requestStore,
+              req,
+              res,
+              ctx,
+              notFoundLoaderTree,
+              formState,
+              postponedState,
+              metadata,
+              undefined, // Prevent restartable-render behavior in dev + Cache Components mode
+              devFallbackParams
+            )
 
-    // If we have pending revalidates, wait until they are all resolved.
-    if (
-      workStore.pendingRevalidates ||
-      workStore.pendingRevalidateWrites ||
-      workStore.pendingRevalidatedTags
-    ) {
-      const pendingPromise = executeRevalidates(workStore).finally(() => {
-        if (process.env.NEXT_PRIVATE_DEBUG_CACHE) {
-          console.log('pending revalidates promise finished for:', url)
+            return new RenderResult(stream, {
+              metadata,
+              contentType: HTML_CONTENT_TYPE_HEADER,
+            })
+          } else if (actionRequestResult.type === 'done') {
+            if (actionRequestResult.result) {
+              actionRequestResult.result.assignMetadata(metadata)
+              return actionRequestResult.result
+            } else if (actionRequestResult.formState) {
+              formState = actionRequestResult.formState
+            }
+          }
         }
-      })
 
-      if (renderOpts.waitUntil) {
-        renderOpts.waitUntil(pendingPromise)
-      } else {
-        options.waitUntil = pendingPromise
+        didExecuteServerAction = true
+        // Restore the resume data cache
+        requestStore.renderResumeDataCache = renderResumeDataCache
       }
-    }
 
-    // Create the new render result for the response.
-    return new RenderResult(stream, options)
-  }
+      const options: RenderResultOptions = {
+        metadata,
+        contentType: HTML_CONTENT_TYPE_HEADER,
+      }
+
+      const stream = await renderToStreamWithTracing(
+        // NOTE: in Cache Components (dev), if the render is restarted, it will use a different requestStore
+        // than the one that we're passing in here.
+        requestStore,
+        req,
+        res,
+        ctx,
+        loaderTree,
+        formState,
+        postponedState,
+        metadata,
+        // If we're rendering HTML after an action, we don't want restartable-render behavior
+        // because the result should be dynamic, like it is in prod.
+        // Also, the request store might have been mutated by the action (e.g. enabling draftMode)
+        // and we currently we don't copy changes over when creating a new store,
+        // so the restarted render wouldn't be correct.
+        didExecuteServerAction ? undefined : createRequestStore,
+        devFallbackParams
+      )
+
+      // Invalid dynamic usages should only error the request in development.
+      // In production, it's better to produce a result.
+      // (the dynamic error will still be thrown inside the component tree, but it's catchable by error boundaries)
+      if (workStore.invalidDynamicUsageError && workStore.dev) {
+        throw workStore.invalidDynamicUsageError
+      }
+
+      // If we have pending revalidates, wait until they are all resolved.
+      if (
+        workStore.pendingRevalidates ||
+        workStore.pendingRevalidateWrites ||
+        workStore.pendingRevalidatedTags
+      ) {
+        const pendingPromise = executeRevalidates(workStore).finally(() => {
+          if (process.env.NEXT_PRIVATE_DEBUG_CACHE) {
+            console.log('pending revalidates promise finished for:', url)
+          }
+        })
+
+        if (renderOpts.waitUntil) {
+          renderOpts.waitUntil(pendingPromise)
+        } else {
+          options.waitUntil = pendingPromise
+        }
+      }
+
+      // Create the new render result for the response.
+      return new RenderResult(stream, options)
+    }
+  })
 }
 
 export type AppPageRender = (

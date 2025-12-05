@@ -965,5 +965,9 @@
   "964": "An unexpected error occurred while starting to capture immediates",
   "965": "Expected setImmediate to reject invalid arguments",
   "966": "Expected process.nextTick to reject invalid arguments",
-  "967": "The key \"%s\" under \"env\" in %sconfig is not allowed. https://nextjs.org/docs/messages/env-key-not-allowed"
+  "967": "The key \"%s\" under \"env\" in %sconfig is not allowed. https://nextjs.org/docs/messages/env-key-not-allowed",
+  "968": "Error in request.ts: %s",
+  "969": "Cannot call headers() inside request.ts.\\n\\nrequest.ts must only use static inputs (params, pathname) to ensure routes can be statically generated.\\n\\nFor dynamic data based on headers, either:\\n  - Use middleware to process headers and pass data via rewrites/cookies\\n  - Read headers directly in the component that needs them\\n",
+  "970": "getRequestContext() was called outside of a request context.\\n\\nThis can happen if:\\n  - You're calling it from a client component (it's server-only)\\n  - You're calling it outside of the render cycle\\n  - There's no request.ts file in your app\\n\\nMake sure you have a request.ts file that exports an onRequest function.",
+  "971": "Cannot call cookies() inside request.ts.\\n\\nrequest.ts must only use static inputs (params, pathname) to ensure routes can be statically generated.\\n\\nFor dynamic data based on cookies, either:\\n  - Use middleware to process cookies and pass data via rewrites\\n  - Read cookies directly in the component that needs them\\n"
 }

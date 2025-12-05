@@ -63,8 +63,10 @@ export interface RequestContextStore<T = unknown> {
  * Module tuple type for request.ts (matches other conventions).
  */
 export type RequestModuleTuple = [
-  () => Promise<{ onRequest?: (input: RequestContextInput) => Promise<unknown> }>,
-  string  // file path
+  () => Promise<{
+    onRequest?: (input: RequestContextInput) => Promise<unknown>
+  }>,
+  string, // file path
 ]
 ```
 
@@ -72,7 +74,7 @@ export type RequestModuleTuple = [
 
 **Create file**: `packages/next/src/server/app-render/request-context-storage.ts`
 
-```typescript
+````typescript
 import { AsyncLocalStorage } from 'async_hooks'
 import type { RequestContextStore } from '../request/request-context'
 
@@ -80,7 +82,8 @@ import type { RequestContextStore } from '../request/request-context'
  * AsyncLocalStorage instance for request context.
  * This allows any code running during a request to access the context.
  */
-export const requestContextStorage = new AsyncLocalStorage<RequestContextStore>()
+export const requestContextStorage =
+  new AsyncLocalStorage<RequestContextStore>()
 
 /**
  * Get the request context.
@@ -106,11 +109,11 @@ export async function getRequestContext<T = unknown>(): Promise<T> {
   if (!store) {
     throw new Error(
       `getRequestContext() was called outside of a request context.\n\n` +
-      `This can happen if:\n` +
-      `  - You're calling it from a client component (it's server-only)\n` +
-      `  - You're calling it outside of the render cycle\n` +
-      `  - There's no request.ts file in your app\n\n` +
-      `Make sure you have a request.ts file that exports an onRequest function.`
+        `This can happen if:\n` +
+        `  - You're calling it from a client component (it's server-only)\n` +
+        `  - You're calling it outside of the render cycle\n` +
+        `  - There's no request.ts file in your app\n\n` +
+        `Make sure you have a request.ts file that exports an onRequest function.`
     )
   }
 
@@ -139,7 +142,7 @@ export async function getRequestContext<T = unknown>(): Promise<T> {
 export function hasRequestContext(): boolean {
   return requestContextStorage.getStore() !== undefined
 }
-```
+````
 
 ### Step 1.3: Create Instance File (for module sharing)
 
@@ -150,7 +153,8 @@ import { AsyncLocalStorage } from 'async_hooks'
 import type { RequestContextStore } from '../request/request-context'
 
 // Singleton instance shared across the module boundary
-export const requestContextStorageInstance = new AsyncLocalStorage<RequestContextStore>()
+export const requestContextStorageInstance =
+  new AsyncLocalStorage<RequestContextStore>()
 ```
 
 Update `request-context-storage.ts` to use the instance:
@@ -170,7 +174,10 @@ Add these exports:
 
 ```typescript
 // Request Context
-export { getRequestContext, hasRequestContext } from './app-render/request-context-storage'
+export {
+  getRequestContext,
+  hasRequestContext,
+} from './app-render/request-context-storage'
 export type { RequestContextInput } from './request/request-context'
 ```
 
@@ -228,7 +235,7 @@ const FILE_TYPES = {
   loading: 'loading',
   'global-error': 'global-error',
   'global-not-found': 'global-not-found',
-  request: 'request',  // ADD THIS LINE
+  request: 'request', // ADD THIS LINE
   ...HTTP_ACCESS_FALLBACKS,
 } as const
 ```
@@ -250,7 +257,7 @@ export type AppDirModules = {
   unauthorized?: ModuleTuple
   'global-error'?: ModuleTuple
   'global-not-found'?: ModuleTuple
-  request?: ModuleTuple  // ADD THIS LINE
+  request?: ModuleTuple // ADD THIS LINE
   page?: ModuleTuple
   defaultPage?: ModuleTuple
 }
@@ -274,7 +281,7 @@ const conventionFiles = [
   'not-found',
   'forbidden',
   'unauthorized',
-  'request',  // ADD THIS
+  'request', // ADD THIS
   // ... etc
 ]
 ```
@@ -317,7 +324,9 @@ import { workUnitAsyncStorage } from './work-unit-async-storage.external'
 /**
  * Collect all request.ts modules from the loader tree, from root to leaf.
  */
-function collectRequestModules(tree: LoaderTree): Array<RequestModuleTuple | undefined> {
+function collectRequestModules(
+  tree: LoaderTree
+): Array<RequestModuleTuple | undefined> {
   const modules: Array<RequestModuleTuple | undefined> = []
 
   let current: LoaderTree | undefined = tree
@@ -372,7 +381,7 @@ export function startRequestContextExecution(
   const requestModules = collectRequestModules(loaderTree)
 
   // Check if there are any request modules
-  const hasRequestModules = requestModules.some(mod => mod !== undefined)
+  const hasRequestModules = requestModules.some((mod) => mod !== undefined)
   if (!hasRequestModules) {
     // No request.ts files, resolve with empty object immediately
     return Promise.resolve({})
@@ -440,11 +449,11 @@ export async function headers(): Promise<ReadonlyHeaders> {
   if (workUnitStore?.disallowDynamicInRequestContext) {
     throw new Error(
       `Cannot call headers() inside request.ts.\n\n` +
-      `request.ts must only use static inputs (params, pathname) to ensure ` +
-      `routes can be statically generated.\n\n` +
-      `For dynamic data based on headers, either:\n` +
-      `  - Use middleware to process headers and pass data via rewrites/cookies\n` +
-      `  - Read headers directly in the component that needs them\n`
+        `request.ts must only use static inputs (params, pathname) to ensure ` +
+        `routes can be statically generated.\n\n` +
+        `For dynamic data based on headers, either:\n` +
+        `  - Use middleware to process headers and pass data via rewrites/cookies\n` +
+        `  - Read headers directly in the component that needs them\n`
     )
   }
 
@@ -465,11 +474,11 @@ export async function cookies(): Promise<ReadonlyRequestCookies> {
   if (workUnitStore?.disallowDynamicInRequestContext) {
     throw new Error(
       `Cannot call cookies() inside request.ts.\n\n` +
-      `request.ts must only use static inputs (params, pathname) to ensure ` +
-      `routes can be statically generated.\n\n` +
-      `For dynamic data based on cookies, either:\n` +
-      `  - Use middleware to process cookies and pass data via rewrites\n` +
-      `  - Read cookies directly in the component that needs them\n`
+        `request.ts must only use static inputs (params, pathname) to ensure ` +
+        `routes can be statically generated.\n\n` +
+        `For dynamic data based on cookies, either:\n` +
+        `  - Use middleware to process cookies and pass data via rewrites\n` +
+        `  - Read cookies directly in the component that needs them\n`
     )
   }
 
@@ -514,13 +523,10 @@ async function renderToHTMLOrFlightImpl(
   const loaderTree = ComponentMod.routeModule.userland.loaderTree
 
   // Start request context execution (NON-BLOCKING - returns promise, doesn't await)
-  const requestContextPromise = startRequestContextExecution(
-    loaderTree,
-    {
-      params: interpolatedParams,
-      pathname: url.pathname,
-    }
-  )
+  const requestContextPromise = startRequestContextExecution(loaderTree, {
+    params: interpolatedParams,
+    pathname: url.pathname,
+  })
 
   // Create the store
   const requestContextStore: RequestContextStore = {
@@ -564,16 +570,16 @@ async function generateDynamicRSCPayload(
   // Extract params from the current context
   // Note: For RSC requests, params need to be extracted from the flight router state
   // or reconstructed from the URL
-  const params = extractParamsFromLoaderTree(loaderTree, getDynamicParamFromSegment)
+  const params = extractParamsFromLoaderTree(
+    loaderTree,
+    getDynamicParamFromSegment
+  )
 
   // Start request context execution (NON-BLOCKING)
-  const requestContextPromise = startRequestContextExecution(
-    loaderTree,
-    {
-      params,
-      pathname: url.pathname,
-    }
-  )
+  const requestContextPromise = startRequestContextExecution(loaderTree, {
+    params,
+    pathname: url.pathname,
+  })
 
   const requestContextStore: RequestContextStore = {
     promise: requestContextPromise,
@@ -652,6 +658,7 @@ test/e2e/app-dir/request-context/
 ### Step 4.2: Create Test Files
 
 **app/request.ts**:
+
 ```typescript
 import type { RequestContextInput } from 'next/server'
 
@@ -667,6 +674,7 @@ export type RootContext = Awaited<ReturnType<typeof onRequest>>
 ```
 
 **app/[market]/request.ts**:
+
 ```typescript
 import type { RequestContextInput } from 'next/server'
 import { getRequestContext } from 'next/server'
@@ -686,6 +694,7 @@ export type MarketContext = Awaited<ReturnType<typeof onRequest>>
 ```
 
 **app/page.tsx**:
+
 ```typescript
 import { getRequestContext } from 'next/server'
 import type { RootContext } from './request'
@@ -706,6 +715,7 @@ export default async function HomePage() {
 ```
 
 **app/[market]/page.tsx**:
+
 ```typescript
 import { getRequestContext } from 'next/server'
 import type { MarketContext } from './request'
@@ -728,6 +738,7 @@ export default async function MarketPage() {
 ```
 
 **app/dynamic-attempt/request.ts**:
+
 ```typescript
 import { headers } from 'next/headers'
 import type { RequestContextInput } from 'next/server'
@@ -742,6 +753,7 @@ export async function onRequest({ params }: RequestContextInput) {
 ### Step 4.3: Create Test File
 
 **request-context.test.ts**:
+
 ```typescript
 import { nextTestSetup } from 'e2e-utils'
 
@@ -753,30 +765,35 @@ describe('request-context', () => {
   describe('basic functionality', () => {
     it('should provide context from request.ts', async () => {
       const browser = await next.browser('/')
-      expect(await browser.elementByCss('[data-testid="root-value"]').text())
-        .toBe('from-root')
+      expect(
+        await browser.elementByCss('[data-testid="root-value"]').text()
+      ).toBe('from-root')
     })
 
     it('should provide pathname in context', async () => {
       const browser = await next.browser('/')
-      expect(await browser.elementByCss('[data-testid="pathname"]').text())
-        .toBe('/')
+      expect(
+        await browser.elementByCss('[data-testid="pathname"]').text()
+      ).toBe('/')
     })
   })
 
   describe('inheritance', () => {
     it('should inherit from parent request.ts', async () => {
       const browser = await next.browser('/se')
-      expect(await browser.elementByCss('[data-testid="root-value"]').text())
-        .toBe('from-root')
-      expect(await browser.elementByCss('[data-testid="market"]').text())
-        .toBe('se')
+      expect(
+        await browser.elementByCss('[data-testid="root-value"]').text()
+      ).toBe('from-root')
+      expect(await browser.elementByCss('[data-testid="market"]').text()).toBe(
+        'se'
+      )
     })
 
     it('should have market-specific data', async () => {
       const browser = await next.browser('/se')
-      expect(await browser.elementByCss('[data-testid="market-specific"]').text())
-        .toBe('market-se')
+      expect(
+        await browser.elementByCss('[data-testid="market-specific"]').text()
+      ).toBe('market-se')
     })
   })
 
@@ -788,24 +805,28 @@ describe('request-context', () => {
       await browser.elementByCss('a[href="/se"]').click()
       await browser.waitForElementByCss('[data-testid="market"]')
 
-      expect(await browser.elementByCss('[data-testid="market"]').text())
-        .toBe('se')
-      expect(await browser.elementByCss('[data-testid="root-value"]').text())
-        .toBe('from-root')
+      expect(await browser.elementByCss('[data-testid="market"]').text()).toBe(
+        'se'
+      )
+      expect(
+        await browser.elementByCss('[data-testid="root-value"]').text()
+      ).toBe('from-root')
     })
 
     it('should update context when navigating between markets', async () => {
       const browser = await next.browser('/se')
 
-      expect(await browser.elementByCss('[data-testid="market"]').text())
-        .toBe('se')
+      expect(await browser.elementByCss('[data-testid="market"]').text()).toBe(
+        'se'
+      )
 
       // Navigate to different market
       await browser.elementByCss('a[href="/no"]').click()
       await browser.waitForElementByCss('[data-testid="market"]')
 
-      expect(await browser.elementByCss('[data-testid="market"]').text())
-        .toBe('no')
+      expect(await browser.elementByCss('[data-testid="market"]').text()).toBe(
+        'no'
+      )
     })
   })
 
@@ -845,6 +866,7 @@ describe('request-context', () => {
 ### Step 5.1: API Reference Documentation
 
 Create documentation for:
+
 - `request.ts` file convention
 - `onRequest()` function
 - `getRequestContext()` function
@@ -853,6 +875,7 @@ Create documentation for:
 ### Step 5.2: Guide Documentation
 
 Create a guide covering:
+
 - When to use `request.ts` vs middleware vs layouts
 - Migration from prop drilling
 - Inheritance patterns
@@ -864,6 +887,7 @@ Create a guide covering:
 ## Checklist
 
 ### Phase 1: Core Infrastructure
+
 - [ ] Create `request-context.ts` type definitions
 - [ ] Create `request-context-storage.ts` with AsyncLocalStorage
 - [ ] Create instance file for module sharing
@@ -871,12 +895,14 @@ Create a guide covering:
 - [ ] Add TypeScript declarations
 
 ### Phase 2: Build-Time Integration
+
 - [ ] Add `request` to `FILE_TYPES`
 - [ ] Update `AppDirModules` type
 - [ ] Add file discovery for `request.ts`
 - [ ] Generate loader tree entries for request modules
 
 ### Phase 3: Runtime Integration
+
 - [ ] Create `execute-request-context.ts`
 - [ ] Add `disallowDynamicInRequestContext` flag to work unit store
 - [ ] Add checks to `headers()` and `cookies()`
@@ -885,6 +911,7 @@ Create a guide covering:
 - [ ] Handle param extraction for RSC requests
 
 ### Phase 4: Testing
+
 - [ ] Create test directory structure
 - [ ] Write test files (request.ts, pages, etc.)
 - [ ] Write e2e tests
@@ -893,6 +920,7 @@ Create a guide covering:
 - [ ] Test error cases
 
 ### Phase 5: Documentation
+
 - [ ] API reference
 - [ ] Usage guide
 - [ ] Migration guide
